@@ -1,0 +1,5 @@
+tarantool-ckit/
+files
+stamp-*
+*.substvars
+*.log

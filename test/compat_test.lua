@@ -1,0 +1,876 @@
+#!/usr/bin/env tarantool
+-- Compatibility test: new cv module vs old validator API
+-- Adapted from aeon/test/common/validator_test.lua
+
+local t  = require('luatest')
+local cv = require('cv')
+
+local luuid = require('uuid')
+
+local g = t.group('compat')
+
+function g.test_common()
+    t.assert_equals(
+        { cv.check(nil, 'null') },
+        { nil, {} }
+    )
+
+    t.assert_equals(
+        { cv.check(nil, 'any') },
+        { nil, {} }
+    )
+
+    t.assert_equals(
+        { cv.check(box.NULL, 'null') },
+        { nil, {} }
+    )
+
+    t.assert_equals(
+        { cv.check(box.NULL, 'any') },
+        { nil, {} }
+    )
+
+    -- optional tests
+    for _, variant in pairs(cv.PROVIDED_TYPES) do
+        local r, e = cv.check(nil, variant .. '?')
+        t.assert_equals(r, nil,
+            'optional ' .. variant ..
+            ' should accept nil')
+        t.assert_equals(#e, 0,
+            'optional ' .. variant ..
+            ' should have no errors')
+    end
+
+    -- uuid
+    local uuid = luuid.new()
+    t.assert_covers(
+        { cv.check(uuid, 'uuid?') },
+        { uuid, {} }
+    )
+
+    for _, uvalue in pairs{1LL, 0LL, 121LL, 1, 2, 3} do
+        t.assert_covers(
+            { cv.check(uvalue, 'unsigned?') },
+            { uvalue, {} }
+        )
+    end
+
+    for _, uvalue in pairs{-1LL, 0LL, -121LL, 1, -2, 3}
+    do
+        t.assert_covers(
+            { cv.check(uvalue, 'integer?') },
+            { uvalue, {} }
+        )
+    end
+
+    t.assert_equals(
+        { cv.check(1, { type = 'number' }) },
+        { 1, {} }
+    )
+    t.assert_equals(
+        { cv.check(1, { 'number' }) },
+        { 1, {} }
+    )
+    t.assert_equals(
+        { cv.check(1, 'number') },
+        { 1, {} }
+    )
+end
+
+function g.test_tables()
+    for _, T in pairs{'table', 'map'} do
+        local r, e = cv.check(
+            { c = 'd', b = 123 },
+            {
+                type = T,
+                properties = {
+                    a = 'string?',
+                    b = 'unsigned',
+                    c = 'string',
+                },
+            }
+        )
+        t.assert_equals(e, {})
+        t.assert_equals(r, { c = 'd', b = 123 })
+    end
+end
+
+function g.test_skip_unexpected_check()
+    for _, T in pairs{'table', 'map'} do
+        local r, e = cv.check(
+            { c = 'd', b = 123 },
+            {
+                type = T,
+                properties = {
+                    a = 'string?',
+                },
+                skip_unexpected_check = true,
+            }
+        )
+        t.assert_equals(e, {})
+        t.assert_equals(r, {})
+    end
+
+    for _, T in pairs{'table', 'map'} do
+        local r, e = cv.check(
+            { c = 'd', b = 123 },
+            {
+                type = T,
+                properties = {
+                    a = 'string?',
+                },
+                skip_unexpected_check = true,
+                return_unexpected = true,
+            }
+        )
+        t.assert_equals(e, {})
+        t.assert_equals(r, { c = 'd', b = 123 })
+    end
+end
+
+function g.test_defaults()
+    t.assert_equals(
+        { cv.check(nil,
+            { type = 'number', default = 121 }) },
+        { 121, {} }
+    )
+    t.assert_equals(
+        { cv.check(nil,
+            { type = 'integer', default = 121123 }) },
+        { 121123, {} }
+    )
+    t.assert_equals(
+        { cv.check(nil,
+            { type = 'boolean', default = true }) },
+        { true, {} }
+    )
+    t.assert_equals(
+        { cv.check(nil,
+            { type = 'boolean', default = false }) },
+        { false, {} }
+    )
+
+    t.assert_equals(
+        {
+            cv.check(
+                {},
+                {
+                    type = 'map',
+                    properties = {
+                        a = {
+                            type = 'string',
+                            default = 'Hello, world',
+                        },
+                        b = 'number?',
+                        c = {
+                            type = 'boolean',
+                            default = false,
+                        }
+                    }
+                }
+            )
+        },
+        { { a = "Hello, world", c = false }, {} }
+    )
+
+    t.assert_equals(
+        {
+            cv.check(
+                nil,
+                {
+                    type = 'map',
+                    default = {},
+                    properties = {
+                        a = {type='string',
+                             default='Hello, world'},
+                        b = 'number?',
+                        c = {type='boolean',
+                             default=false}
+                    },
+                }
+            )
+        },
+        {{ a = "Hello, world", c = false}, {}}
+    )
+
+    -- short forms
+    t.assert_equals(
+        { cv.check(nil,
+            { 'number', default = 121 }) },
+        { 121, {} }
+    )
+    t.assert_equals(
+        { cv.check(nil, { 'number', 121 }) },
+        { 121, {} }
+    )
+    t.assert_equals(
+        {cv.check(nil,
+            {type='number', default=121, min=1000})},
+        {
+            nil,
+            {
+                {
+                    details = {min = 1000, value = 121},
+                    message = "Value is less than minimum",
+                    path = "$",
+                    type = "VALUE_ERROR",
+                },
+            },
+        }
+    )
+end
+
+function g.test_match()
+    t.assert_equals(
+        { cv.check('Hello, world',
+            { 'string', match = 'llo%S' }) },
+        { 'Hello, world', {} }
+    )
+
+    t.assert_equals(
+        { cv.check('Hello',
+            { 'string', match = 'abc' }) },
+        {
+            nil,
+            {
+                {
+                    type = 'VALUE_ERROR',
+                    details = {
+                        match_string = 'abc',
+                        value = 'Hello'
+                    },
+                    message = "Value doesn't match"
+                              .. " the regexp",
+                    path = '$',
+                }
+            }
+        }
+    )
+end
+
+function g.test_enum()
+    t.assert_equals(
+        { cv.check('11',
+            { 'string', enum = {'12','11','10'} }) },
+        { '11', {} }
+    )
+
+    t.assert_equals(
+        { cv.check('11',
+            { 'string', enum = {12, 11, 10} }) },
+        {
+            nil,
+            {
+                {
+                    type = 'VALUE_ERROR',
+                    details = {
+                        enum_variants = {12, 11, 10},
+                        value = '11'
+                    },
+                    message =
+                        "Value does not belong to set",
+                    path = '$',
+                }
+            }
+        }
+    )
+end
+
+function g.test_min_max()
+    t.assert_equals(
+        { cv.check(11,
+            {'number', min = 11, max = 11}) },
+        { 11, {} }
+    )
+
+    t.assert_equals(
+        { cv.check(11LL,
+            {'number', min = 11, max = 11}) },
+        { 11LL, {} }
+    )
+
+    t.assert_equals(
+        { cv.check(25,
+            {'number', min = 11, max = 15}) },
+        {
+            nil,
+            {
+                {
+                    type = "VALUE_ERROR",
+                    details = {max = 15, value = 25},
+                    message = "Value exceeded maximum",
+                    path = "$",
+                },
+            }
+        }
+    )
+
+    t.assert_equals(
+        { cv.check(5,
+            {'number', min = 11, max = 15}) },
+        {
+            nil,
+            {
+                {
+                    type = "VALUE_ERROR",
+                    details = {min = 11, value = 5},
+                    message =
+                        "Value is less than minimum",
+                    path = "$",
+                },
+            }
+        }
+    )
+end
+
+function g.test_gt()
+    t.assert_equals(
+        {cv.check(11, {'number', gt = 10})},
+        {11, {}}
+    )
+    t.assert_equals(
+        {cv.check(11LL, {'number', gt = 10})},
+        {11LL, {}}
+    )
+    t.assert_equals(
+        {cv.check(11, {'number', gt = 11})},
+        {
+            nil,
+            {
+                {
+                    type = "VALUE_ERROR",
+                    details = {gt = 11, value = 11},
+                    message = "Value is too small",
+                    path = "$",
+                },
+            }
+        }
+    )
+end
+
+function g.test_lt()
+    t.assert_equals(
+        {cv.check(9, {'number', lt = 10})},
+        {9, {}}
+    )
+    t.assert_equals(
+        {cv.check(9LL, {'number', lt = 10})},
+        {9LL, {}}
+    )
+    t.assert_equals(
+        {cv.check(11, {'number', lt = 11})},
+        {
+            nil,
+            {
+                {
+                    type = "VALUE_ERROR",
+                    details = {lt = 11, value = 11},
+                    message = "Value is too big",
+                    path = "$",
+                },
+            }
+        }
+    )
+end
+
+function g.test_min_max_length()
+    t.assert_equals(
+        { cv.check('x',
+            {'string', min_length=0, max_length=3}) },
+        { 'x', {} }
+    )
+
+    t.assert_equals(
+        { cv.check({'x'},
+            {'array', min_length=0, max_length=3}) },
+        { {'x'}, {} }
+    )
+
+    t.assert_equals(
+        { cv.check('xxxx',
+            {'string', min_length=0, max_length=3}) },
+        {
+            nil,
+            {
+                {
+                    type = 'VALUE_ERROR',
+                    path = '$',
+                    message = 'Value len exceeded maximum',
+                    details = {
+                        max_len = 3,
+                        value = "xxxx",
+                    }
+                }
+            }
+        }
+    )
+
+    t.assert_equals(
+        { cv.check({1, 2},
+            {'array', min_length = 3}) },
+        {
+            nil,
+            {
+                {
+                    type = 'VALUE_ERROR',
+                    path = '$',
+                    message =
+                        'Value len is less than minimum',
+                    details = {
+                        min_len = 3,
+                        value = { 1, 2 },
+                    }
+                }
+            }
+        }
+    )
+end
+
+function g.test_arrays()
+    t.assert_equals(
+        { cv.check({'x'}, { type = 'array' }) },
+        { {'x'}, {} }
+    )
+    t.assert_equals(
+        { cv.check({'x'}, { 'array' }) },
+        { {'x'}, {} }
+    )
+    t.assert_equals(
+        { cv.check({'x'},
+            { 'array', items = { 'string' } }) },
+        { {'x'}, {} }
+    )
+    t.assert_equals(
+        { cv.check({'x'},
+            { 'array', items = 'string' }) },
+        { {'x'}, {} }
+    )
+
+    t.assert_equals(
+        { cv.check({'x'},
+            { 'array', items = { 'number' } }) },
+        {
+            nil,
+            {
+                {
+                    type = "TYPE_ERROR",
+                    details = {
+                        actual_type = "string",
+                        expected_type = "number",
+                        value = "x"
+                    },
+                    message =
+                        "Wrong type, expected"
+                        .. " number, got string",
+                    path = "$[1]",
+                },
+            }
+        }
+    )
+
+    local ary = {}
+    ary[1] = 1
+    ary[2] = box.NULL
+    ary[3] = 3
+
+    t.assert_equals(
+        { cv.check(ary,
+            { 'array', items = { 'number?' } }) },
+        { {1, nil, 3}, {} }
+    )
+end
+
+function g.test_uuid()
+    local uuid = luuid.new()
+    t.assert_equals(
+        { cv.check(uuid, 'uuid') },
+        { uuid, {} }
+    )
+
+    t.assert_equals(
+        { cv.check(1LL, 'uuid') },
+        {
+            nil,
+            {
+                {
+                    type = "TYPE_ERROR",
+                    details = {
+                        actual_type = "cdata",
+                        cdata_type = 'ctype<int64_t>',
+                        expected_type = "uuid",
+                        value = 1LL,
+                    },
+                    message =
+                        "Wrong type, expected"
+                        .. " uuid, got cdata",
+                    path = "$",
+                },
+            }
+        }
+    )
+end
+
+function g.test_tuple()
+    local tuple = box.tuple.new({1, 2, 3})
+    t.assert_equals(
+        { cv.check(tuple, 'tuple') },
+        { tuple, {} }
+    )
+
+    t.assert_equals(
+        { cv.check(1LL, 'tuple') },
+        {
+            nil,
+            {
+                {
+                    type = 'TYPE_ERROR',
+                    details = {
+                        actual_type = 'cdata',
+                        cdata_type = 'ctype<int64_t>',
+                        expected_type = 'tuple',
+                        value = 1LL,
+                    },
+                    message =
+                        'Wrong type, expected'
+                        .. ' tuple, got cdata',
+                    path = '$',
+                },
+            }
+        }
+    )
+end
+
+function g.test_name()
+    t.assert_equals(
+        { cv.check(1LL,
+            { 'uuid', name = 'foobar'}) },
+        {
+            nil,
+            {
+                {
+                   details = {
+                       actual_type = "cdata",
+                       cdata_type = "ctype<int64_t>",
+                       expected_type = "uuid",
+                       value = 1LL,
+                   },
+                   message =
+                       "Wrong type, expected"
+                       .. " uuid, got cdata",
+                   path = "$",
+                   type = "TYPE_ERROR",
+                   name = 'foobar',
+                },
+            },
+        }
+    )
+end
+
+function g.test_fun()
+    local f = function() return 1 end
+    local fo = setmetatable({}, {__call = f})
+
+    t.assert_equals(
+        { cv.check(f, 'function') },
+        { f, {} }
+    )
+    t.assert_equals(
+        { cv.check(fo, 'function') },
+        { fo, {} }
+    )
+    t.assert_equals(
+        { cv.check(123, 'function') },
+        {
+            nil,
+            {
+                {
+                    details = {
+                        actual_type = "number",
+                        expected_type = "function",
+                        value = 123
+                    },
+                    message =
+                        "Wrong type, expected"
+                        .. " function, got number",
+                    path = "$",
+                    type = "TYPE_ERROR",
+                },
+            }
+        }
+    )
+end
+
+function g.test_func_constraint()
+    t.assert_equals(
+        {
+            cv.check(
+                123,
+                {
+                    'number',
+                    constraint = function(value)
+                        t.assert_equals(value, 123)
+                    end
+                }
+            )
+        },
+        { 123, {} }
+    )
+
+    t.assert_equals(
+        {
+            cv.check(
+                123,
+                {
+                    'number',
+                    constraint = function(value)
+                        t.assert_equals(value, 123)
+                        error(false, 0)
+                    end
+                }
+            )
+        },
+        {
+            nil,
+            {
+                {
+                    details = {
+                        constraint_error = false,
+                        value = 123
+                    },
+                    message =
+                        "Field constraint detected"
+                        .. " error",
+                    path = "$",
+                    type = "CONSTRAINT_ERROR",
+                },
+            }
+        }
+    )
+
+    t.assert_equals(
+        {
+            cv.check(
+                123,
+                {
+                    'number',
+                    constraint = function(value)
+                        t.assert_equals(value, 123)
+                        error("Hello, world", 0)
+                    end
+                }
+            )
+        },
+        {
+            nil,
+            {
+                {
+                    message =
+                        "Field constraint detected"
+                        .. " error",
+                    path = "$",
+                    type = "CONSTRAINT_ERROR",
+                    details = {
+                        constraint_error =
+                            "Hello, world",
+                        value = 123,
+                    }
+                }
+            }
+        }
+    )
+end
+
+function g.test_oneof()
+    t.assert_equals(
+        {
+            cv.check(
+                123,
+                {
+                    'oneof',
+                    variants = { 'string', 'number' }
+                }
+            )
+        },
+        { 123, {} }
+    )
+
+    -- oneof fail: errors from all variants + ONEOF_ERROR
+    local r, e = cv.check(
+        123,
+        {
+            'oneof',
+            variants = { 'string', 'table' }
+        }
+    )
+    t.assert_equals(r, nil)
+    t.assert_equals(e[#e].type, 'ONEOF_ERROR')
+    t.assert_equals(e[#e].details.value, 123)
+    t.assert_is_not(
+        e[#e].details.oneof_schema, nil)
+    -- variant errors come first
+    t.assert_equals(e[1].type, 'TYPE_ERROR')
+end
+
+function g.test_func_transform()
+    t.assert_equals(
+        {
+            cv.check(
+                123,
+                {
+                    'number',
+                    transform = function(value)
+                        return value + 100
+                    end
+                }
+            )
+        },
+        { 223, {} }
+    )
+
+    t.assert_equals(
+        {
+            cv.check(
+                nil,
+                {
+                    'number',
+                    default = 123,
+                    transform = function(value)
+                        return value * 2
+                    end
+                }
+            )
+        },
+        { 246, {} }
+    )
+
+    -- transform returns nil → result is nil
+    t.assert_equals(
+        {
+            cv.check(
+                123,
+                {
+                    'number',
+                    transform = function(_value)
+                    end
+                }
+            )
+        },
+        { nil, {} }
+    )
+
+    -- transform error
+    local r, e = cv.check(
+        {a = 'asd'},
+        {
+            'map',
+            properties = { a = 'string' },
+            transform = function(value)
+                value.b = 234
+                error(false, 0)
+            end
+        }
+    )
+    t.assert_equals(r, nil)
+    t.assert_equals(e[1].type, 'TRANSFORM_ERROR')
+    t.assert_equals(
+        e[1].details.transform_error, false)
+end
+
+function g.test_rename()
+    t.assert_equals(
+        {
+            cv.check(
+                {3, 2, 1, one = 4, four = '5'},
+                {
+                    type = 'map',
+                    properties = {
+                        one   = 'number',
+                        two   = 'number',
+                        three = 'number',
+                        four  = 'string',
+                    },
+                    rename = {
+                        [1] = 'one',
+                        [2] = 'two',
+                        [3] = 'three',
+                    },
+                }
+            )
+        },
+        {
+            {one=3, two=2, three=1, four='5'}, {}
+        }
+    )
+end
+
+function g.test_map_items()
+    t.assert_equals(
+        {
+            cv.check(
+                {a = 1, b = 2, c = 3},
+                {'map', items = 'number'}
+            )
+        },
+        { {a = 1, b = 2, c = 3}, {} }
+    )
+    local r, e = cv.check(
+        {a = 1, b = 'foo', c = 3},
+        {'map', items = 'number'}
+    )
+    t.assert_equals(r, nil)
+    t.assert_equals(e[1].type, 'TYPE_ERROR')
+    t.assert_equals(
+        e[1].details.actual_type, 'string')
+    t.assert_equals(
+        e[1].details.expected_type, 'number')
+end
+
+-- -------------------------------------------------------
+-- raise_errors option
+-- -------------------------------------------------------
+
+function g.test_raise_errors_compile()
+    local ok, err = pcall(function()
+        cv.compile(
+            {type = 'invalid_type_xyz'},
+            {raise_errors = true})
+    end)
+    t.assert_equals(ok, false)
+    t.assert_is_not(err, nil)
+end
+
+function g.test_raise_errors_check()
+    local s = cv.compile('string')
+    local ok, err = pcall(function()
+        s:check(42, {raise_errors = true})
+    end)
+    t.assert_equals(ok, false)
+    t.assert_is_not(err, nil)
+end
+
+-- -------------------------------------------------------
+-- is_schema
+-- -------------------------------------------------------
+
+function g.test_is_schema()
+    local s = cv.compile('string')
+    t.assert_equals(cv.is_schema(s), true)
+    t.assert_equals(cv.is_schema('string'), false)
+    t.assert_equals(cv.is_schema({type='string'}),
+        false)
+    t.assert_equals(cv.is_schema(nil), false)
+end
+
+-- -------------------------------------------------------
+-- compile passes already-compiled schema through check
+-- -------------------------------------------------------
+
+function g.test_check_compiled_schema()
+    local s = cv.compile('string')
+    -- pass compiled schema to cv.check
+    local r, e = cv.check('hello', s)
+    t.assert_equals(e, {})
+    t.assert_equals(r, 'hello')
+end
+
+-- vim: ts=4 sts=4 sw=4 et
