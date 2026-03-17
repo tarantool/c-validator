@@ -1,0 +1,125 @@
+name: test
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Update of a developer branch cancels the previously scheduled workflow
+  # run for this branch. However, the 'master' branch and tag workflow runs
+  # are never canceled.
+  #
+  # We use a trick here: define the concurrency group as 'workflow run ID' +
+  # 'workflow run attempt' because it is a unique combination for any run.
+  # So it effectively discards grouping.
+  #
+  # Important: we cannot use `github.sha` as a unique identifier because
+  # pushing a tag may cancel a run that works on a branch push event.
+  group: ${{ (
+    github.ref == 'refs/heads/master' ||
+    startsWith(github.ref, 'refs/tags/') ) &&
+    format('{0}-{1}', github.run_id, github.run_attempt) ||
+    format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-20.04-self-hosted
+
+    container:
+      image: docker.io/tarantool/testing:ubuntu-focal
+
+    strategy:
+      fail-fast: false
+      matrix:
+        tarantool:
+          - 'release-master'
+
+    env:
+      TNT_RELEASE_PATH: /home/runner/tnt-release
+
+    steps:
+      - name: Prepare checkout
+        uses: tarantool/actions/prepare-checkout@master
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: ${{ github.ref }}
+
+      - name: Setup tarantool ${{ matrix.tarantool }}
+        if: startsWith(matrix.tarantool, 'release') != true
+        uses: tarantool/setup-tarantool@v3
+        with:
+          tarantool-version: ${{ matrix.tarantool }}
+
+      - name: Create variables for Tarantool ${{ matrix.tarantool }}
+        if: startsWith(matrix.tarantool, 'release')
+        run: |
+          branch=$(echo ${{ matrix.tarantool }} | cut -d- -f2)
+          commit_hash=$(git ls-remote https://github.com/tarantool/tarantool.git --branch ${branch} | head -c 8)
+          echo "TNT_BRANCH=${branch}" >> $GITHUB_ENV
+          echo "VERSION_POSTFIX=-${commit_hash}" >> $GITHUB_ENV
+
+      - name: Restore tarantool ${{ matrix.tarantool }}
+        if: startsWith(matrix.tarantool, 'release')
+        id: cache-tnt-release
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TNT_RELEASE_PATH }}
+          key: cache-tnt-${{ matrix.tarantool }}${{ env.VERSION_POSTFIX }}
+
+      - name: Clone tarantool ${{ matrix.tarantool }}
+        if: startsWith(matrix.tarantool, 'release') && !steps.cache-tnt-release.outputs.cache-hit
+        uses: actions/checkout@v4
+        with:
+          repository: tarantool/tarantool
+          ref: ${{ env.TNT_BRANCH }}
+          path: tarantool
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Build tarantool ${{ matrix.tarantool }}
+        if: startsWith(matrix.tarantool, 'release') && !steps.cache-tnt-release.outputs.cache-hit
+        run: |
+          cd ${GITHUB_WORKSPACE}/tarantool
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_DIST=ON
+          make -j $(nproc) && make -j $(nproc) DESTDIR=${TNT_RELEASE_PATH} install
+
+      - name: Save tarantool ${{ matrix.tarantool }}
+        if: startsWith(matrix.tarantool, 'release') && !steps.cache-tnt-release.outputs.cache-hit
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.TNT_RELEASE_PATH }}
+          key: cache-tnt-${{ matrix.tarantool }}${{ env.VERSION_POSTFIX }}
+
+      - name: Install tarantool ${{ matrix.tarantool }}
+        if: startsWith(matrix.tarantool, 'release')
+        # Workaround as actions/cache cannot restore data to /usr/local
+        run: cp -rvP ${TNT_RELEASE_PATH}/usr/local/* /usr/local/
+
+      - name: Install tt
+        run: |
+          curl -L https://tarantool.io/release/2/installer.sh | sudo bash
+          sudo apt install -y tt
+          tt version
+
+      - name: Install luatest
+        run: tt rocks install luatest 1.4.0
+
+      - name: Generate make files
+        run: PATH="$PATH:$(pwd)/.rocks/bin" cmake -S . -B build
+
+      - name: Build
+        run: make -C build
+
+      - name: Run tests
+        run: make -C build test
