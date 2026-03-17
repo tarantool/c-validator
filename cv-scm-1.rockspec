@@ -2,8 +2,8 @@ package = 'cv'
 version = 'scm-1'
 
 source = {
-    url    = 'git+https://github.com/unera/cv.git';
-    branch = 'main';
+    url = "git+ssh://git@github.com:tarantool/c-validator.git",
+    branch = 'master';
 }
 
 description = {
@@ -18,7 +18,7 @@ Supports: maps, arrays, oneof, rename, defaults,
 transforms, constraints, uuid, tuple, int64/uint64,
 box.NULL, and OpenAPI 3.1 schema serialization.
     ]];
-    homepage = 'https://github.com/unera/cv';
+    homepage = 'https://github.com/tarantool/c-validator';
     license  = 'BSD-2-Clause';
 }
 
