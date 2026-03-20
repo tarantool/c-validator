@@ -30,7 +30,7 @@ endif()
 
 find_program(LUATEST_BIN luatest)
 if(NOT LUATEST_BIN)
-    message(FATAL_ERROR "luatest not found in PATH")
+    message(WARNING "luatest not found in PATH")
 endif()
 
 # Set CFLAGS
