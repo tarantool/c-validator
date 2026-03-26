@@ -42,6 +42,7 @@ _cv._init({
         return tostring(ffi.typeof(v))
     end,
     box_null    = box.NULL,
+    deepcopy    = table.deepcopy,
 })
 
 -- -------------------------------------------------------

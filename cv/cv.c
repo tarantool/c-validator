@@ -242,6 +242,7 @@ static int cv_ref_uuid_is     = LUA_NOREF;
 static int cv_ref_tuple_is    = LUA_NOREF;
 static int cv_ref_ffi_typestr = LUA_NOREF;
 static int cv_ref_box_null    = LUA_NOREF;
+static int cv_ref_deepcopy    = LUA_NOREF;
 
 /*
  * Helper: is cdata at idx an int64_t?
@@ -2701,26 +2702,55 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 			if (pp->node->optional) {
 				continue;
 			}
-			if (pp->node->default_ref !=
-			    LUA_NOREF) {
-				if (!ctx->validate_only) {
-					/*
-					 * Apply default. Simple
-					 * values are fine as-is;
-					 * tables need deepcopy
-					 * (TODO: deepcopy).
-					 * For now push as-is.
-					 */
-					lua_rawgeti(L,
-					    LUA_REGISTRYINDEX,
-					    pp->node->default_ref);
+		if (pp->node->default_ref !=
+		    LUA_NOREF) {
+			if (!ctx->validate_only) {
+				/*
+				 * Apply default via deepcopy
+				 * so each check() call gets
+				 * its own independent copy.
+				 * Then run cv_check_node on
+				 * the copy so nested defaults
+				 * are applied too.
+				 */
+				lua_rawgeti(L,
+				    LUA_REGISTRYINDEX,
+				    cv_ref_deepcopy);
+				lua_rawgeti(L,
+				    LUA_REGISTRYINDEX,
+				    pp->node->default_ref);
+				luaT_call(L, 1, 1);
+				int dval_idx = lua_gettop(L);
+				if (ctx->depth <
+				    CV_PATH_MAX_DEPTH) {
+					ctx->path[ctx->depth]
+					    = pp->key;
+					ctx->depth++;
+				}
+				bool r = cv_check_node(L,
+				    ctx, dval_idx,
+				    pp->node);
+				if (ctx->depth > 0)
+					ctx->depth--;
+				if (r) {
+					/* write back: value at
+					 * dval_idx may have been
+					 * updated by transform */
+					lua_pushvalue(L, dval_idx);
 					cv_map_setfield(L,
 					    data_idx, &pp->key);
 				}
-				/* validate_only: default
-				 * present = ok */
-				continue;
+				lua_pop(L, 1); /* pop dval */
+				if (!r) {
+					ok = false;
+					if (ctx->fail_fast)
+						return false;
+				}
 			}
+			/* validate_only: default
+			 * present = ok */
+			continue;
+		}
 			/* truly missing */
 			if (ctx->depth < CV_PATH_MAX_DEPTH) {
 				ctx->path[ctx->depth] = pp->key;
@@ -3077,13 +3107,17 @@ cv_schema_check(lua_State *L)
 	/*
 	 * Top-level default: if data is nil and
 	 * schema has a default, apply it before
-	 * validation (for scalar top-level nodes).
+	 * validation. Use deepcopy so each call
+	 * gets an independent copy of the default.
 	 */
 	if (lua_isnil(L, 2) &&
 	    (*pp)->default_ref != LUA_NOREF &&
 	    !validate_only) {
 		lua_rawgeti(L, LUA_REGISTRYINDEX,
+		    cv_ref_deepcopy);
+		lua_rawgeti(L, LUA_REGISTRYINDEX,
 		    (*pp)->default_ref);
+		luaT_call(L, 1, 1);
 		lua_replace(L, 2);
 	}
 
@@ -3244,6 +3278,19 @@ cv__init(lua_State *L)
 	lua_getfield(L, 1, "box_null");
 	if (!lua_isnil(L, -1))
 		cv_ref_box_null =
+			luaL_ref(L, LUA_REGISTRYINDEX);
+	else
+		lua_pop(L, 1);
+
+	/* deepcopy function */
+	if (cv_ref_deepcopy != LUA_NOREF) {
+		luaL_unref(L, LUA_REGISTRYINDEX,
+		    cv_ref_deepcopy);
+		cv_ref_deepcopy = LUA_NOREF;
+	}
+	lua_getfield(L, 1, "deepcopy");
+	if (lua_isfunction(L, -1))
+		cv_ref_deepcopy =
 			luaL_ref(L, LUA_REGISTRYINDEX);
 	else
 		lua_pop(L, 1);
