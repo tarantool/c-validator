@@ -2421,17 +2421,17 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
                const struct cv_node *n)
 {
 	if (lua_type(L, data_idx) != LUA_TTABLE) {
-		int det = cv_ctx_push_error(L, ctx, n,
-		    "TYPE_ERROR",
-		    "Wrong type, expected array,"
-		    " got map");
+		char msg[256];
+		const char *actual_type =
+			lua_typename(L, lua_type(L, data_idx));
+		snprintf(msg, sizeof(msg), "Wrong type, expected array, got %s",
+			 actual_type);
+		int det = cv_ctx_push_error(L, ctx, n, "TYPE_ERROR", msg);
 		if (det != 0) {
 			lua_pushstring(L, "array");
 			lua_setfield(L, det,
 			    "expected_type");
-			lua_pushstring(L,
-			    lua_typename(L,
-			        lua_type(L, data_idx)));
+			lua_pushstring(L, actual_type);
 			lua_setfield(L, det,
 			    "actual_type");
 			lua_pushvalue(L, data_idx);
@@ -2591,17 +2591,17 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
              const struct cv_node *n)
 {
 	if (lua_type(L, data_idx) != LUA_TTABLE) {
-		int det = cv_ctx_push_error(L, ctx, n,
-		    "TYPE_ERROR",
-		    "Wrong type, expected map, got"
-		    " non-table");
+		char msg[256];
+		const char *actual_type =
+			lua_typename(L, lua_type(L, data_idx));
+		snprintf(msg, sizeof(msg), "Wrong type, expected map, got %s",
+			 actual_type);
+		int det = cv_ctx_push_error(L, ctx, n, "TYPE_ERROR", msg);
 		if (det != 0) {
 			lua_pushstring(L, "map");
 			lua_setfield(L, det,
 			    "expected_type");
-			lua_pushstring(L,
-			    lua_typename(L,
-			        lua_type(L, data_idx)));
+			lua_pushstring(L, actual_type);
 			lua_setfield(L, det,
 			    "actual_type");
 			lua_pushvalue(L, data_idx);
