@@ -680,6 +680,108 @@ function g.test_func_constraint()
     )
 end
 
+function g.test_map_constraint()
+    -- constraint ok
+    t.assert_equals(
+        {
+            cv.check(
+                {asd = 123},
+                {
+                    type = 'map',
+                    properties = { asd = 'number' },
+                    constraint = function(value)
+                        t.assert_equals(
+                            value, {asd = 123})
+                    end
+                }
+            )
+        },
+        { {asd = 123}, {} }
+    )
+
+    -- constraint error (false)
+    t.assert_equals(
+        {
+            cv.check(
+                {asd = 123},
+                {
+                    type = 'map',
+                    properties = { asd = 'number' },
+                    constraint = function(_value)
+                        error(false, 0)
+                    end
+                }
+            )
+        },
+        {
+            nil,
+            {
+                {
+                    details = {
+                        constraint_error = false,
+                        value = {asd = 123},
+                    },
+                    message =
+                        "Field constraint detected"
+                        .. " error",
+                    path = "$",
+                    type = "CONSTRAINT_ERROR",
+                },
+            }
+        }
+    )
+end
+
+function g.test_array_constraint()
+    -- constraint ok
+    t.assert_equals(
+        {
+            cv.check(
+                {1, 2, 3},
+                {
+                    type = 'array',
+                    constraint = function(value)
+                        t.assert_equals(
+                            value, {1, 2, 3})
+                    end
+                }
+            )
+        },
+        { {1, 2, 3}, {} }
+    )
+
+    -- constraint error (string)
+    t.assert_equals(
+        {
+            cv.check(
+                {1, 2, 3},
+                {
+                    type = 'array',
+                    constraint = function(_value)
+                        error("bad array", 0)
+                    end
+                }
+            )
+        },
+        {
+            nil,
+            {
+                {
+                    details = {
+                        constraint_error = "bad array",
+                        value = {1, 2, 3},
+                    },
+                    message =
+                        "Field constraint detected"
+                        .. " error",
+                    path = "$",
+                    type = "CONSTRAINT_ERROR",
+                },
+            }
+        }
+    )
+end
+
 function g.test_oneof()
     t.assert_equals(
         {
