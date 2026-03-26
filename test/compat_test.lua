@@ -873,4 +873,28 @@ function g.test_check_compiled_schema()
     t.assert_equals(r, 'hello')
 end
 
+-- -------------------------------------------------------
+-- array: map-table must be rejected with ARRAY_EXPECTED
+-- -------------------------------------------------------
+
+function g.test_array_map_rejected()
+    -- pure map (string keys) passed as array
+    local r, e = cv.check(
+        {a = 1, b = 2},
+        {type = 'array'}
+    )
+    t.assert_equals(r, nil)
+    t.assert_equals(#e, 1)
+    t.assert_equals(e[1].type, 'ARRAY_EXPECTED')
+
+    -- mixed table (sequential + string key)
+    local r2, e2 = cv.check(
+        {1, 2, extra = 'x'},
+        {type = 'array'}
+    )
+    t.assert_equals(r2, nil)
+    t.assert_equals(#e2, 1)
+    t.assert_equals(e2[1].type, 'ARRAY_EXPECTED')
+end
+
 -- vim: ts=4 sts=4 sw=4 et
