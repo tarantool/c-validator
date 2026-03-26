@@ -897,4 +897,31 @@ function g.test_array_map_rejected()
     t.assert_equals(e2[1].type, 'ARRAY_EXPECTED')
 end
 
+-- -------------------------------------------------------
+-- array: make sure the error message is correct if a non-array
+-- was provided instead of an array.
+-- -------------------------------------------------------
+
+function g.test_array_type_error_message()
+    local r, e = cv.check(1, {type = 'array'})
+    local exp = {
+        details = {actual_type = "number", expected_type = "array", value = 1},
+        message = "Wrong type, expected array, got number",
+        path = "$",
+        type = "TYPE_ERROR",
+    }
+    t.assert_equals(r, nil)
+    t.assert_equals(e, {exp})
+
+    r, e = cv.check(1, {type = 'map'})
+    exp = {
+        details = {actual_type = "number", expected_type = "map", value = 1},
+        message = "Wrong type, expected map, got number",
+        path = "$",
+        type = "TYPE_ERROR",
+    }
+    t.assert_equals(r, nil)
+    t.assert_equals(e, {exp})
+end
+
 -- vim: ts=4 sts=4 sw=4 et
