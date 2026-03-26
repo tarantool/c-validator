@@ -2440,6 +2440,24 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 		return false;
 	}
 
+	/* Check that all keys are integers (reject maps) */
+	lua_pushnil(L);
+	while (lua_next(L, data_idx) != 0) {
+		lua_pop(L, 1); /* pop value, keep key */
+		if (lua_type(L, -1) != LUA_TNUMBER) {
+			lua_pop(L, 1); /* pop key */
+			int det = cv_ctx_push_error(L, ctx, n,
+			    "ARRAY_EXPECTED",
+			    "Unexpected map");
+			if (det != 0) {
+				lua_pushvalue(L, data_idx);
+				lua_setfield(L, det, "value");
+				lua_pop(L, 1);
+			}
+			return false;
+		}
+	}
+
 	int len = (int)lua_objlen(L, data_idx);
 
 	if (n->as.array.has_min_items &&
