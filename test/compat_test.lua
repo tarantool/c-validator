@@ -77,6 +77,80 @@ function g.test_common()
     )
 end
 
+-- Regression: nil value for required field must produce
+-- UNDEFINED_VALUE, not TYPE_ERROR (matches old validator).
+function g.test_undefined_value()
+    -- top-level nil without default
+    local r, e = cv.check(nil, 'string')
+    t.assert_equals(r, nil)
+    t.assert_equals(#e, 1)
+    t.assert_equals(e[1].type, 'UNDEFINED_VALUE')
+
+    -- nil field in map without default
+    local r2, e2 = cv.check(
+        {x = nil},
+        {
+            type = 'map',
+            properties = { x = 'number' },
+        }
+    )
+    t.assert_equals(r2, nil)
+    t.assert_equals(#e2, 1)
+    t.assert_equals(e2[1].type, 'UNDEFINED_VALUE')
+    t.assert_equals(e2[1].path, '$.x')
+
+    -- nil is ok for optional field
+    local r3, e3 = cv.check(
+        {},
+        {
+            type = 'map',
+            properties = { x = 'number?' },
+        }
+    )
+    t.assert_equals(e3, {})
+    t.assert_equals(r3, {})
+end
+
+-- nil value must NOT produce UNDEFINED_VALUE
+-- when the field has a default.
+function g.test_no_undefined_when_default()
+    -- top-level nil with default
+    local r, e = cv.check(nil,
+        {type = 'string', default = 'hello'})
+    t.assert_equals(e, {})
+    t.assert_equals(r, 'hello')
+
+    -- nil field in map with default
+    local r2, e2 = cv.check(
+        {},
+        {
+            type = 'map',
+            properties = {
+                x = {type = 'number', default = 42},
+            },
+        }
+    )
+    t.assert_equals(e2, {})
+    t.assert_equals(r2.x, 42)
+
+    -- nil field in map with default = false
+    -- (falsy default must also work)
+    local r3, e3 = cv.check(
+        {},
+        {
+            type = 'map',
+            properties = {
+                flag = {
+                    type = 'boolean',
+                    default = false,
+                },
+            },
+        }
+    )
+    t.assert_equals(e3, {})
+    t.assert_equals(r3.flag, false)
+end
+
 function g.test_tables()
     for _, T in pairs{'table', 'map'} do
         local r, e = cv.check(

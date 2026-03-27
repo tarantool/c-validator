@@ -3110,6 +3110,24 @@ cv_check_node(lua_State *L, struct cv_ctx *ctx,
 			return true;
 	}
 
+	/*
+	 * nil value for a required non-null type:
+	 * report UNDEFINED_VALUE, matching the old
+	 * validator behaviour (bench/validator.lua:475).
+	 */
+	if (lua_type(L, data_idx) == LUA_TNIL &&
+	    n->type != CV_TYPE_ANY  &&
+	    n->type != CV_TYPE_NULL &&
+	    n->type != CV_TYPE_NIL  &&
+	    !n->optional) {
+		int det = cv_ctx_push_error(L, ctx, n,
+		    "UNDEFINED_VALUE",
+		    "Undefined value");
+		if (det != 0)
+			lua_pop(L, 1);
+		return false;
+	}
+
 	switch (n->type) {
 	case CV_TYPE_MAP:
 		return cv_check_map(L, ctx,
