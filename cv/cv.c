@@ -894,6 +894,20 @@ cv_compile_node(lua_State *L, int def_idx,
 	n->nullable = nullable_from_type || optional;
 	cv_node_init_refs(n);
 
+	/*
+	 * For map/table without properties (e.g. bare
+	 * 'map' string schema or {type='map'} without
+	 * properties key): default to accepting and
+	 * returning all keys, matching old validator
+	 * (bench/validator.lua:792-794).
+	 * Overridden later if properties are present
+	 * or explicit flags are set.
+	 */
+	if (n->type == CV_TYPE_MAP) {
+		n->as.map.skip_unexpected   = true;
+		n->as.map.return_unexpected = true;
+	}
+
 	if (lua_type(L, def_idx) != LUA_TTABLE)
 		return n;
 
@@ -1183,17 +1197,14 @@ cv_compile_node(lua_State *L, int def_idx,
 		lua_pop(L, 1);
 
 		/*
-		 * Default flags depend on whether
-		 * properties were defined:
-		 * - no properties: accept and return all
-		 *   keys (old validator bench/validator.lua
-		 *   lines 792-794).
-		 * - with properties: reject unknown keys
-		 *   unless explicitly allowed.
-		 * Explicit schema flags override defaults.
+		 * When properties are present, switch to
+		 * strict mode (reject unknown keys) unless
+		 * the user explicitly set the flags.
 		 */
-		n->as.map.skip_unexpected   = !has_props;
-		n->as.map.return_unexpected = !has_props;
+		if (has_props) {
+			n->as.map.skip_unexpected   = false;
+			n->as.map.return_unexpected = false;
+		}
 
 		/* skip_unexpected_check */
 		lua_getfield(L, def_idx,

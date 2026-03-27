@@ -153,22 +153,21 @@ end
 
 -- map/table without properties must accept any keys
 -- (matches old validator bench/validator.lua:792-794).
+-- Both table-schema {type='map'} and string schema 'map'
+-- must behave identically.
 function g.test_map_no_properties()
-    for _, T in pairs{'map', 'table'} do
-        local r, e = cv.check(
-            {a = 123},
-            {type = T}
-        )
-        t.assert_equals(e, {}, T)
-        t.assert_equals(r, {a = 123}, T)
-
-        -- nested keys also pass through
-        local r2, e2 = cv.check(
-            {x = 1, y = 'hello'},
-            {type = T}
-        )
-        t.assert_equals(e2, {}, T)
-        t.assert_equals(r2, {x = 1, y = 'hello'}, T)
+    local schemas = {
+        {type = 'map'},
+        {type = 'table'},
+        {'map'},
+        {'table'},
+        'map',
+        'table',
+    }
+    for _, s in ipairs(schemas) do
+        local r, e = cv.check({a = 123}, s)
+        t.assert_equals(e, {})
+        t.assert_equals(r, {a = 123})
     end
 end
 
