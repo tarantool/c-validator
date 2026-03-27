@@ -2863,6 +2863,14 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 		if (ctx->depth > 0)
 			ctx->depth--;
 
+		if (r && !ctx->validate_only) {
+			/* write back: cv_check_node may have
+			 * updated val_idx via transform */
+			lua_pushvalue(L, val_idx);
+			cv_map_setfield(L, data_idx,
+			    &pp->key);
+		}
+
 		lua_pop(L, 1); /* pop value */
 
 		if (!r) {

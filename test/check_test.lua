@@ -537,4 +537,104 @@ g.test_enum_value_error = function()
         errs[1].details.enum_variants, 'table')
 end
 
+-- -------------------------------------------------------
+-- transform on map field must be written back
+-- -------------------------------------------------------
+
+-- Regression: transform applied to a map field must be
+-- written back into the parent table.
+-- Previously cv_check_node mutated the stack copy but
+-- never called cv_map_setfield to persist the change.
+g.test_map_field_transform_writeback = function()
+    -- simple scalar field with transform
+    local s = schema({
+        type = 'map',
+        properties = {
+            x = {
+                type = 'number',
+                transform = function(v)
+                    return v * 10
+                end,
+            },
+        },
+    })
+    local r, errs = s:check({x = 5})
+    t.assert_equals(errs, {})
+    t.assert_equals(r.x, 50)
+
+    -- oneof field with transform: parent map transform
+    -- must see the already-transformed child value
+    local seen_by_parent
+    local s2 = schema({
+        type = 'map',
+        properties = {
+            field = {
+                type = 'oneof',
+                variants = {
+                    {
+                        type = 'number',
+                        transform = function(v)
+                            return v * 2
+                        end,
+                    },
+                    'string',
+                },
+            },
+        },
+        transform = function(v)
+            seen_by_parent = v.field
+            return v
+        end,
+    })
+    local r2, errs2 = s2:check({field = 3})
+    t.assert_equals(errs2, {})
+    -- child transform: 3 -> 6
+    t.assert_equals(r2.field, 6)
+    -- parent transform must see the child result
+    t.assert_equals(seen_by_parent, 6)
+end
+
+-- -------------------------------------------------------
+-- transform on array items must be written back
+-- -------------------------------------------------------
+
+-- Verify that cv_check_array already correctly writes
+-- back transformed item values (regression guard).
+g.test_array_item_transform_writeback = function()
+    local s = schema({
+        type = 'array',
+        items = {
+            type = 'number',
+            transform = function(v)
+                return v * 10
+            end,
+        },
+    })
+    local r, errs = s:check({1, 2, 3})
+    t.assert_equals(errs, {})
+    t.assert_equals(r, {10, 20, 30})
+end
+
+-- array items via oneof with transform in matched variant
+g.test_array_item_transform_writeback_oneof = function()
+    local s = schema({
+        type = 'array',
+        items = {
+            type = 'oneof',
+            variants = {
+                {
+                    type = 'number',
+                    transform = function(v)
+                        return v * 2
+                    end,
+                },
+                'string',
+            },
+        },
+    })
+    local r, errs = s:check({3, 'hello', 5})
+    t.assert_equals(errs, {})
+    t.assert_equals(r, {6, 'hello', 10})
+end
+
 -- vim: ts=4 sts=4 sw=4 et
