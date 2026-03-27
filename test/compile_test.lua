@@ -295,9 +295,11 @@ g.test_map_basic = function()
             'type alias ' .. tp .. ' -> map')
         t.assert_equals(tbl.optional, false)
         t.assert_equals(tbl.nullable, false)
+        -- no properties: unknown keys are accepted
+        -- and returned (matches old validator)
         t.assert_equals(tbl.skip_unexpected_check,
-            false)
-        t.assert_equals(tbl.return_unexpected, false)
+            true)
+        t.assert_equals(tbl.return_unexpected, true)
     end
 end
 

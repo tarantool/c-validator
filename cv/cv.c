@@ -1067,21 +1067,6 @@ cv_compile_node(lua_State *L, int def_idx,
 	}
 
 	case CV_TYPE_MAP: {
-		/* skip_unexpected_check */
-		lua_getfield(L, def_idx,
-		             "skip_unexpected_check");
-		if (lua_isboolean(L, -1))
-			n->as.map.skip_unexpected =
-				lua_toboolean(L, -1);
-		lua_pop(L, 1);
-
-		/* return_unexpected */
-		lua_getfield(L, def_idx,
-		             "return_unexpected");
-		if (lua_isboolean(L, -1))
-			n->as.map.return_unexpected =
-				lua_toboolean(L, -1);
-		lua_pop(L, 1);
 
 		/* rename: parse into sorted array */
 		lua_getfield(L, def_idx, "rename");
@@ -1183,7 +1168,9 @@ cv_compile_node(lua_State *L, int def_idx,
 
 		/* properties */
 		lua_getfield(L, def_idx, "properties");
-		if (lua_type(L, -1) == LUA_TTABLE) {
+		bool has_props =
+		    (lua_type(L, -1) == LUA_TTABLE);
+		if (has_props) {
 			int props_idx = lua_gettop(L);
 			if (!cv_parse_properties(
 			        L, props_idx, n,
@@ -1193,6 +1180,35 @@ cv_compile_node(lua_State *L, int def_idx,
 				return NULL;
 			}
 		}
+		lua_pop(L, 1);
+
+		/*
+		 * Default flags depend on whether
+		 * properties were defined:
+		 * - no properties: accept and return all
+		 *   keys (old validator bench/validator.lua
+		 *   lines 792-794).
+		 * - with properties: reject unknown keys
+		 *   unless explicitly allowed.
+		 * Explicit schema flags override defaults.
+		 */
+		n->as.map.skip_unexpected   = !has_props;
+		n->as.map.return_unexpected = !has_props;
+
+		/* skip_unexpected_check */
+		lua_getfield(L, def_idx,
+		             "skip_unexpected_check");
+		if (lua_isboolean(L, -1))
+			n->as.map.skip_unexpected =
+				lua_toboolean(L, -1);
+		lua_pop(L, 1);
+
+		/* return_unexpected */
+		lua_getfield(L, def_idx,
+		             "return_unexpected");
+		if (lua_isboolean(L, -1))
+			n->as.map.return_unexpected =
+				lua_toboolean(L, -1);
 		lua_pop(L, 1);
 
 		/*
