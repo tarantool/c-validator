@@ -1079,6 +1079,23 @@ function g.test_func_transform()
         e[1].details.transform_error, false)
 end
 
+function g.test_transform_nested()
+    t.assert_equals(
+        {
+            cv.check(
+                {},
+                {
+                    'map',
+                    transform = function(_value)
+                        return {foo = 'bar'}
+                    end
+                }
+            )
+        },
+        { {foo = "bar"}, {} }
+    )
+end
+
 function g.test_rename()
     t.assert_equals(
         {

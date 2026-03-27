@@ -2594,7 +2594,24 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 		lua_rawgeti(L, LUA_REGISTRYINDEX,
 		    n->transform_ref);
 		lua_pushvalue(L, data_idx);
-		lua_call(L, 1, 0);
+		if (lua_pcall(L, 1, 1, 0) == 0) {
+			lua_replace(L, data_idx);
+		} else {
+			int errmsg = lua_gettop(L);
+			int det = cv_ctx_push_error(L, ctx,
+			    n, "TRANSFORM_ERROR",
+			    "Field transformation failed");
+			if (det != 0) {
+				lua_pushvalue(L, data_idx);
+				lua_setfield(L, det, "value");
+				lua_pushvalue(L, errmsg);
+				lua_setfield(L, det,
+				    "transform_error");
+				lua_pop(L, 1);
+			}
+			lua_pop(L, 1); /* errmsg */
+			return false;
+		}
 	}
 
 	return ok;
@@ -3041,7 +3058,9 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 		lua_rawgeti(L, LUA_REGISTRYINDEX,
 		    n->transform_ref);
 		lua_pushvalue(L, data_idx);
-		if (lua_pcall(L, 1, 0, 0) != 0) {
+		if (lua_pcall(L, 1, 1, 0) == 0) {
+			lua_replace(L, data_idx);
+		} else {
 			int errmsg = lua_gettop(L);
 			int det = cv_ctx_push_error(L, ctx,
 			    n, "TRANSFORM_ERROR",

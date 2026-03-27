@@ -637,4 +637,24 @@ g.test_array_item_transform_writeback_oneof = function()
     t.assert_equals(r, {6, 'hello', 10})
 end
 
+-- -------------------------------------------------------
+-- transform on array itself (not items) must be applied
+-- -------------------------------------------------------
+
+-- Regression: transform on the array node itself was
+-- called with nresults=0 — the returned value was
+-- discarded. Fixed by using nresults=1 + lua_replace.
+g.test_array_self_transform = function()
+    -- transform returns a brand new table
+    local s = schema({
+        type = 'array',
+        transform = function(_v)
+            return {99, 98, 97}
+        end,
+    })
+    local r, errs = s:check({1, 2, 3})
+    t.assert_equals(errs, {})
+    t.assert_equals(r, {99, 98, 97})
+end
+
 -- vim: ts=4 sts=4 sw=4 et
