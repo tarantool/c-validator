@@ -220,6 +220,47 @@ function g.test_defaults()
     )
 end
 
+-- Regression: empty table passed as arg, field has
+-- scalar default — deepcopy must not corrupt the stack.
+function g.test_scalar_default_in_map()
+    -- exact scenario from bug report:
+    -- ARG={}, SCHEMA={type=map, ttl={number,default=5}}
+    t.assert_equals(
+        {
+            cv.check(
+                {},
+                {
+                    type = 'map',
+                    properties = {
+                        ttl = {
+                            'number',
+                            min = 0,
+                            default = 5,
+                        },
+                    },
+                }
+            )
+        },
+        { {ttl = 5}, {} }
+    )
+
+    -- same but called twice in a row (stack leak check)
+    local s = cv.compile({
+        type = 'map',
+        properties = {
+            ttl = {type = 'number', default = 5},
+            name = {type = 'string', default = 'x'},
+        },
+    })
+    local r1, e1 = s:check({})
+    t.assert_equals(e1, {})
+    t.assert_equals(r1, {ttl = 5, name = 'x'})
+
+    local r2, e2 = s:check({})
+    t.assert_equals(e2, {})
+    t.assert_equals(r2, {ttl = 5, name = 'x'})
+end
+
 function g.test_match()
     t.assert_equals(
         { cv.check('Hello, world',
@@ -780,6 +821,44 @@ function g.test_array_constraint()
             }
         }
     )
+end
+
+function g.test_nested_map_constraint()
+    local schema = {
+        type = 'map',
+        properties = {
+            -- outer has no constraint
+            inner = {
+                type = 'map',
+                properties = {
+                    x = 'number',
+                },
+                constraint = function(value)
+                    if value.x > 3 then
+                        error("x too big", 0)
+                    end
+                end,
+            },
+        },
+    }
+
+    -- constraint passes: x <= 3
+    local r, e = cv.check(
+        {inner = {x = 2}}, schema)
+    t.assert_equals(e, {})
+    t.assert_equals(r, {inner = {x = 2}})
+
+    -- constraint fails: x > 3
+    local r2, e2 = cv.check(
+        {inner = {x = 5}}, schema)
+    t.assert_equals(r2, nil)
+    t.assert_equals(#e2, 1)
+    t.assert_equals(e2[1].type, 'CONSTRAINT_ERROR')
+    t.assert_equals(e2[1].path, '$.inner')
+    t.assert_equals(
+        e2[1].details.constraint_error, "x too big")
+    t.assert_equals(
+        e2[1].details.value, {x = 5})
 end
 
 function g.test_oneof()

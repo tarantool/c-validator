@@ -2726,55 +2726,57 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 			if (pp->node->optional) {
 				continue;
 			}
-		if (pp->node->default_ref !=
-		    LUA_NOREF) {
-			if (!ctx->validate_only) {
-				/*
-				 * Apply default via deepcopy
-				 * so each check() call gets
-				 * its own independent copy.
-				 * Then run cv_check_node on
-				 * the copy so nested defaults
-				 * are applied too.
-				 */
-				lua_rawgeti(L,
-				    LUA_REGISTRYINDEX,
-				    cv_ref_deepcopy);
-				lua_rawgeti(L,
-				    LUA_REGISTRYINDEX,
-				    pp->node->default_ref);
-				luaT_call(L, 1, 1);
-				int dval_idx = lua_gettop(L);
-				if (ctx->depth <
-				    CV_PATH_MAX_DEPTH) {
-					ctx->path[ctx->depth]
-					    = pp->key;
-					ctx->depth++;
+			if (pp->node->default_ref !=
+			    LUA_NOREF) {
+				if (!ctx->validate_only) {
+					/*
+					 * Apply default via deepcopy
+					 * so each check() call gets
+					 * its own independent copy.
+					 * Then run cv_check_node on
+					 * the copy so nested defaults
+					 * are applied too.
+					 */
+					int top_before =
+					    lua_gettop(L);
+					lua_rawgeti(L,
+					    LUA_REGISTRYINDEX,
+					    cv_ref_deepcopy);
+					lua_rawgeti(L,
+					    LUA_REGISTRYINDEX,
+					    pp->node->default_ref);
+					luaT_call(L, 1, 1);
+					int dval_idx = lua_gettop(L);
+					if (ctx->depth <
+					    CV_PATH_MAX_DEPTH) {
+						ctx->path[ctx->depth]
+						    = pp->key;
+						ctx->depth++;
+					}
+					bool r = cv_check_node(L,
+					    ctx, dval_idx,
+					    pp->node);
+					if (ctx->depth > 0)
+						ctx->depth--;
+					if (r) {
+						/* write back: value at
+						 * dval_idx may have been
+						 * updated by transform */
+						lua_pushvalue(L, dval_idx);
+						cv_map_setfield(L,
+						    data_idx, &pp->key);
+					}
+					lua_pop(L, 1); /* pop dval */
+					if (!r) {
+						ok = false;
+						if (ctx->fail_fast)
+							return false;
+					}
 				}
-				bool r = cv_check_node(L,
-				    ctx, dval_idx,
-				    pp->node);
-				if (ctx->depth > 0)
-					ctx->depth--;
-				if (r) {
-					/* write back: value at
-					 * dval_idx may have been
-					 * updated by transform */
-					lua_pushvalue(L, dval_idx);
-					cv_map_setfield(L,
-					    data_idx, &pp->key);
-				}
-				lua_pop(L, 1); /* pop dval */
-				if (!r) {
-					ok = false;
-					if (ctx->fail_fast)
-						return false;
-				}
+				/* validate_only: default
+				 * present = ok */
+				continue;
 			}
-			/* validate_only: default
-			 * present = ok */
-			continue;
-		}
 			/* truly missing */
 			if (ctx->depth < CV_PATH_MAX_DEPTH) {
 				ctx->path[ctx->depth] = pp->key;
@@ -3330,18 +3332,21 @@ cv__init(lua_State *L)
 	else
 		lua_pop(L, 1);
 
-	/* deepcopy function */
+	/* deepcopy function — required */
 	if (cv_ref_deepcopy != LUA_NOREF) {
 		luaL_unref(L, LUA_REGISTRYINDEX,
 		    cv_ref_deepcopy);
 		cv_ref_deepcopy = LUA_NOREF;
 	}
 	lua_getfield(L, 1, "deepcopy");
-	if (lua_isfunction(L, -1))
-		cv_ref_deepcopy =
-			luaL_ref(L, LUA_REGISTRYINDEX);
-	else
+	if (!lua_isfunction(L, -1)) {
 		lua_pop(L, 1);
+		luaL_error(L,
+		    "cv._init: deepcopy must be"
+		    " a function");
+	}
+	cv_ref_deepcopy =
+		luaL_ref(L, LUA_REGISTRYINDEX);
 
 	return 0;
 }
