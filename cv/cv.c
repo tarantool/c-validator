@@ -2488,6 +2488,13 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 
 	int len = (int)lua_objlen(L, data_idx);
 
+	bool ok = true;
+
+	/*
+	 * Length checks: report errors but continue
+	 * validating items (matches old validator
+	 * bench/validator.lua:650-668).
+	 */
 	if (n->as.array.has_min_items &&
 	    (size_t)len < n->as.array.min_items) {
 		int det = cv_ctx_push_error(L, ctx, n,
@@ -2501,7 +2508,9 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 			lua_setfield(L, det, "value");
 			lua_pop(L, 1);
 		}
-		return false;
+		ok = false;
+		if (ctx->fail_fast)
+			return false;
 	}
 	if (n->as.array.has_max_items &&
 	    (size_t)len > n->as.array.max_items) {
@@ -2516,10 +2525,10 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 			lua_setfield(L, det, "value");
 			lua_pop(L, 1);
 		}
-		return false;
+		ok = false;
+		if (ctx->fail_fast)
+			return false;
 	}
-
-	bool ok = true;
 	if (n->as.array.items != NULL) {
 		for (int i = 1; i <= len; i++) {
 			lua_rawgeti(L, data_idx, i);

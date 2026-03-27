@@ -155,6 +155,34 @@ end
 -- (matches old validator bench/validator.lua:792-794).
 -- Both table-schema {type='map'} and string schema 'map'
 -- must behave identically.
+-- Regression: min_length violation must not prevent
+-- item-level validation from running (old validator
+-- bench/validator.lua:650-668 does not early-return).
+function g.test_array_min_length_and_items()
+    local schema = {
+        type = 'map',
+        properties = {
+            asd = {
+                type = 'array?',
+                items = {'number', gt = 0},
+                min_length = 2,
+            },
+        },
+    }
+    local r, e = cv.check({asd = {0}}, schema)
+    t.assert_equals(r, nil)
+    t.assert_equals(#e, 2)
+    -- min_length error
+    t.assert_equals(e[1].type, 'VALUE_ERROR')
+    t.assert_equals(e[1].path, '$.asd')
+    t.assert_equals(e[1].details.min_len, 2)
+    -- item gt=0 error
+    t.assert_equals(e[2].type, 'VALUE_ERROR')
+    t.assert_equals(e[2].path, '$.asd[1]')
+    t.assert_equals(e[2].details.gt, 0)
+    t.assert_equals(e[2].details.value, 0)
+end
+
 function g.test_map_no_properties()
     local schemas = {
         {type = 'map'},
