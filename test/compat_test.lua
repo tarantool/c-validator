@@ -1096,6 +1096,46 @@ function g.test_transform_nested()
     )
 end
 
+function g.test_oneof_transform()
+    -- transform on oneof node must be applied
+    -- after the matching variant is validated
+    t.assert_equals(
+        {
+            cv.check(
+                'asd',
+                {
+                    type = 'oneof',
+                    variants = {'string', 'number'},
+                    transform = function(_value)
+                        return {zxc = 'ewq'}
+                    end,
+                }
+            )
+        },
+        { {zxc = 'ewq'}, {} }
+    )
+end
+
+function g.test_oneof_constraint()
+    -- constraint on oneof node must be called
+    -- after the matching variant is validated
+    local r, e = cv.check(
+        42,
+        {
+            type = 'oneof',
+            variants = {'string', 'number'},
+            constraint = function(v)
+                if v > 10 then
+                    error("too big", 0)
+                end
+            end,
+        }
+    )
+    t.assert_equals(r, nil)
+    t.assert_equals(#e, 1)
+    t.assert_equals(e[1].type, 'CONSTRAINT_ERROR')
+end
+
 function g.test_rename()
     t.assert_equals(
         {

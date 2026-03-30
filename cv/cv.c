@@ -1951,6 +1951,80 @@ static bool cv_check_node(lua_State *L,
     const struct cv_node *n);
 
 /* =========================================================
+ * cv_node_run_constraint / cv_node_run_transform
+ *
+ * Called from cv_check_node after type-specific check.
+ * Extracted here so scalar/array/map/oneof don't each
+ * duplicate the same pcall boilerplate.
+ * ========================================================= */
+
+/*
+ * Run constraint callback if present.
+ * Returns false (and pushes error) on failure.
+ */
+static bool
+cv_node_run_constraint(lua_State *L, struct cv_ctx *ctx,
+                       int data_idx,
+                       const struct cv_node *n)
+{
+	if (n->constraint_ref == LUA_NOREF)
+		return true;
+	lua_rawgeti(L, LUA_REGISTRYINDEX,
+	    n->constraint_ref);
+	lua_pushvalue(L, data_idx);
+	if (lua_pcall(L, 1, 0, 0) == 0)
+		return true;
+	int errmsg = lua_gettop(L);
+	int det = cv_ctx_push_error(L, ctx, n,
+	    "CONSTRAINT_ERROR",
+	    "Field constraint detected error");
+	if (det != 0) {
+		lua_pushvalue(L, data_idx);
+		lua_setfield(L, det, "value");
+		lua_pushvalue(L, errmsg);
+		lua_setfield(L, det, "constraint_error");
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1); /* errmsg */
+	return false;
+}
+
+/*
+ * Run transform callback if present and not validate_only.
+ * On success replaces data_idx with the returned value.
+ * Returns false (and pushes error) on failure.
+ */
+static bool
+cv_node_run_transform(lua_State *L, struct cv_ctx *ctx,
+                      int data_idx,
+                      const struct cv_node *n)
+{
+	if (ctx->validate_only ||
+	    n->transform_ref == LUA_NOREF)
+		return true;
+	lua_rawgeti(L, LUA_REGISTRYINDEX,
+	    n->transform_ref);
+	lua_pushvalue(L, data_idx);
+	if (lua_pcall(L, 1, 1, 0) == 0) {
+		lua_replace(L, data_idx);
+		return true;
+	}
+	int errmsg = lua_gettop(L);
+	int det = cv_ctx_push_error(L, ctx, n,
+	    "TRANSFORM_ERROR",
+	    "Field transformation failed");
+	if (det != 0) {
+		lua_pushvalue(L, data_idx);
+		lua_setfield(L, det, "value");
+		lua_pushvalue(L, errmsg);
+		lua_setfield(L, det, "transform_error");
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1); /* errmsg */
+	return false;
+}
+
+/* =========================================================
  * cv_check_scalar
  * ========================================================= */
 
@@ -2385,56 +2459,6 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 		}
 	}
 
-	/* constraint callback via pcall */
-	if (n->constraint_ref != LUA_NOREF) {
-		lua_rawgeti(L, LUA_REGISTRYINDEX,
-		    n->constraint_ref);
-		lua_pushvalue(L, data_idx);
-		if (lua_pcall(L, 1, 0, 0) != 0) {
-			int errmsg = lua_gettop(L);
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "CONSTRAINT_ERROR",
-			    "Field constraint detected"
-			    " error");
-			if (det != 0) {
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pushvalue(L, errmsg);
-				lua_setfield(L, det,
-				    "constraint_error");
-				lua_pop(L, 1);
-			}
-			lua_pop(L, 1); /* errmsg */
-			return false;
-		}
-	}
-
-	/* transform via pcall */
-	if (!ctx->validate_only &&
-	    n->transform_ref != LUA_NOREF) {
-		lua_rawgeti(L, LUA_REGISTRYINDEX,
-		    n->transform_ref);
-		lua_pushvalue(L, data_idx);
-		if (lua_pcall(L, 1, 1, 0) == 0) {
-			lua_replace(L, data_idx);
-		} else {
-			int errmsg = lua_gettop(L);
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "TRANSFORM_ERROR",
-			    "Field transformation failed");
-			if (det != 0) {
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pushvalue(L, errmsg);
-				lua_setfield(L, det,
-				    "transform_error");
-				lua_pop(L, 1);
-			}
-			lua_pop(L, 1); /* errmsg */
-			return false;
-		}
-	}
-
 	return true;
 }
 
@@ -2561,56 +2585,6 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 				if (ctx->fail_fast)
 					return false;
 			}
-		}
-	}
-
-	/* constraint on the array itself */
-	if (ok && n->constraint_ref != LUA_NOREF) {
-		lua_rawgeti(L, LUA_REGISTRYINDEX,
-		    n->constraint_ref);
-		lua_pushvalue(L, data_idx);
-		if (lua_pcall(L, 1, 0, 0) != 0) {
-			int errmsg = lua_gettop(L);
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "CONSTRAINT_ERROR",
-			    "Field constraint detected"
-			    " error");
-			if (det != 0) {
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pushvalue(L, errmsg);
-				lua_setfield(L, det,
-				    "constraint_error");
-				lua_pop(L, 1);
-			}
-			lua_pop(L, 1); /* errmsg */
-			return false;
-		}
-	}
-
-	/* transform on the array itself */
-	if (ok && !ctx->validate_only &&
-	    n->transform_ref != LUA_NOREF) {
-		lua_rawgeti(L, LUA_REGISTRYINDEX,
-		    n->transform_ref);
-		lua_pushvalue(L, data_idx);
-		if (lua_pcall(L, 1, 1, 0) == 0) {
-			lua_replace(L, data_idx);
-		} else {
-			int errmsg = lua_gettop(L);
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "TRANSFORM_ERROR",
-			    "Field transformation failed");
-			if (det != 0) {
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pushvalue(L, errmsg);
-				lua_setfield(L, det,
-				    "transform_error");
-				lua_pop(L, 1);
-			}
-			lua_pop(L, 1); /* errmsg */
-			return false;
 		}
 	}
 
@@ -3076,56 +3050,6 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 	}
 	/* return_unexpected: do nothing extra */
 
-	/* --- step 3: constraint via pcall --- */
-	if (ok && n->constraint_ref != LUA_NOREF) {
-		lua_rawgeti(L, LUA_REGISTRYINDEX,
-		    n->constraint_ref);
-		lua_pushvalue(L, data_idx);
-		if (lua_pcall(L, 1, 0, 0) != 0) {
-			int errmsg = lua_gettop(L);
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "CONSTRAINT_ERROR",
-			    "Field constraint detected"
-			    " error");
-			if (det != 0) {
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pushvalue(L, errmsg);
-				lua_setfield(L, det,
-				    "constraint_error");
-				lua_pop(L, 1);
-			}
-			lua_pop(L, 1); /* errmsg */
-			return false;
-		}
-	}
-
-	/* --- step 4: transform via pcall --- */
-	if (ok && !ctx->validate_only &&
-	    n->transform_ref != LUA_NOREF) {
-		lua_rawgeti(L, LUA_REGISTRYINDEX,
-		    n->transform_ref);
-		lua_pushvalue(L, data_idx);
-		if (lua_pcall(L, 1, 1, 0) == 0) {
-			lua_replace(L, data_idx);
-		} else {
-			int errmsg = lua_gettop(L);
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "TRANSFORM_ERROR",
-			    "Field transformation failed");
-			if (det != 0) {
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pushvalue(L, errmsg);
-				lua_setfield(L, det,
-				    "transform_error");
-				lua_pop(L, 1);
-			}
-			lua_pop(L, 1); /* errmsg */
-			return false;
-		}
-	}
-
 	return ok;
 }
 
@@ -3239,20 +3163,32 @@ cv_check_node(lua_State *L, struct cv_ctx *ctx,
 		return false;
 	}
 
+	bool ok;
 	switch (n->type) {
 	case CV_TYPE_MAP:
-		return cv_check_map(L, ctx,
+		ok = cv_check_map(L, ctx,
 		    data_idx, n);
+		break;
 	case CV_TYPE_ARRAY:
-		return cv_check_array(L, ctx,
+		ok = cv_check_array(L, ctx,
 		    data_idx, n);
+		break;
 	case CV_TYPE_ONEOF:
-		return cv_check_oneof(L, ctx,
+		ok = cv_check_oneof(L, ctx,
 		    data_idx, n);
+		break;
 	default:
-		return cv_check_scalar(L, ctx,
+		ok = cv_check_scalar(L, ctx,
 		    data_idx, n);
+		break;
 	}
+
+	if (!ok)
+		return false;
+	return cv_node_run_constraint(
+	           L, ctx, data_idx, n) &&
+	       cv_node_run_transform(
+	           L, ctx, data_idx, n);
 }
 
 /* =========================================================
