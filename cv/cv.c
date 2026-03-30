@@ -2786,9 +2786,6 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 
 		if (found_as == NULL) {
 			/* not found anywhere */
-			if (pp->node->optional) {
-				continue;
-			}
 			if (pp->node->default_ref !=
 			    LUA_NOREF) {
 				if (!ctx->validate_only) {
@@ -2840,6 +2837,10 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 				 * present = ok */
 				continue;
 			}
+			/* no default — optional means skip */
+			if (pp->node->optional)
+				continue;
+
 			/* truly missing */
 			if (ctx->depth < CV_PATH_MAX_DEPTH) {
 				ctx->path[ctx->depth] = pp->key;

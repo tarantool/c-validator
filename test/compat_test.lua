@@ -207,6 +207,24 @@ function g.test_unexpected_key_details()
     t.assert_type(e[1].details.value, 'table')
 end
 
+-- default must be applied even when field is optional
+-- (optional means "absence is ok", but default wins)
+function g.test_optional_with_default()
+    local r, e = cv.check(
+        {},
+        {
+            type = 'map',
+            properties = {
+                field  = {type = 'number?', default = 123},
+                field2 = {type = 'number',  default = 321},
+            },
+        }
+    )
+    t.assert_equals(e, {})
+    t.assert_equals(r.field,  123)
+    t.assert_equals(r.field2, 321)
+end
+
 function g.test_empty_details_omitted()
     -- UNDEFINED_VALUE has no details in old validator
     local r, e = cv.check(nil, 'string')
