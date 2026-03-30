@@ -2,7 +2,7 @@ package = 'cv'
 version = 'scm-1'
 
 source = {
-    url = "git+ssh://git@github.com:tarantool/c-validator.git",
+    url = "git+https://github.com/tarantool/c-validator.git",
     branch = 'master';
 }
 
