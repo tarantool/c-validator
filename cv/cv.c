@@ -1909,7 +1909,12 @@ cv_ctx_push_error(lua_State *L,
 	char path_buf[512];
 	cv_ctx_path(ctx, path_buf, sizeof(path_buf));
 
-	/* build details table from pairs on stack */
+	/*
+	 * Build details table from ndetails key/value
+	 * pairs sitting on top of the stack.
+	 * We build the table on top, then pop all pairs,
+	 * so we never touch anything below det_base.
+	 */
 	int det_base = lua_gettop(L) - ndetails * 2;
 	if (ndetails > 0) {
 		lua_newtable(L);
@@ -1921,8 +1926,9 @@ cv_ctx_push_error(lua_State *L,
 			lua_pushvalue(L, vi);
 			lua_rawset(L, det);
 		}
-		/* replace pairs with details table */
-		lua_replace(L, det_base + 1);
+		/* move details table below the pairs,
+		 * then pop the pairs */
+		lua_insert(L, det_base + 1);
 		lua_settop(L, det_base + 1);
 	}
 
@@ -1949,7 +1955,6 @@ cv_ctx_push_error(lua_State *L,
 		/* details table is at det_base+1 */
 		lua_pushvalue(L, det_base + 1);
 		lua_setfield(L, err_idx, "details");
-		/* pop details table */
 		lua_remove(L, det_base + 1);
 	}
 

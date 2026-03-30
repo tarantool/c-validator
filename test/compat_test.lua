@@ -185,6 +185,28 @@ end
 
 -- Empty details table must be omitted from error objects,
 -- matching old validator behaviour.
+-- Regression: unexpected_key in details must contain the
+-- actual unknown key, not the string literal "value".
+-- cv_ctx_push_error was corrupting data_idx on the stack
+-- when det_base+1 == data_idx (lua_replace overwrote it).
+function g.test_unexpected_key_details()
+    local r, e = cv.check(
+        {foo = 'bar', engine = 'memtx'},
+        {
+            type = 'map',
+            properties = {
+                engine = 'string',
+            },
+            skip_unexpected_check = false,
+        }
+    )
+    t.assert_equals(r, nil)
+    t.assert_equals(#e, 1)
+    t.assert_equals(e[1].type, 'UNEXPECTED_KEY')
+    t.assert_equals(e[1].details.unexpected_key, 'foo')
+    t.assert_type(e[1].details.value, 'table')
+end
+
 function g.test_empty_details_omitted()
     -- UNDEFINED_VALUE has no details in old validator
     local r, e = cv.check(nil, 'string')
