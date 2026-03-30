@@ -1096,6 +1096,67 @@ function g.test_transform_nested()
     )
 end
 
+-- transform must fire even when the value is nil or
+-- box.NULL (nullable field). Old validator always called
+-- transform when #errors == 0, regardless of nil.
+function g.test_transform_nullable_null()
+    local schema = {
+        type = 'map',
+        properties = {
+            asd = {
+                type = 'number?',
+                transform = function()
+                    return 100
+                end,
+            },
+        },
+    }
+
+    -- box.NULL: transform must replace with 100
+    t.assert_equals(
+        {cv.check({asd = box.NULL}, schema)},
+        { {asd = 100}, {} }
+    )
+end
+
+-- box.NULL in a map field must be treated as absent:
+-- apply default if present, or UNDEFINED_VALUE if required.
+function g.test_box_null_as_absent()
+    -- field with default: box.NULL -> default applied
+    local r, e = cv.check(
+        {x = box.NULL},
+        {
+            type = 'map',
+            properties = {
+                x = {type = 'number', default = 42},
+            },
+        }
+    )
+    t.assert_equals(e, {})
+    t.assert_equals(r.x, 42)
+
+    -- required field: box.NULL -> UNDEFINED_VALUE
+    local r2, e2 = cv.check(
+        {x = box.NULL},
+        {
+            type = 'map',
+            properties = { x = 'number' },
+        }
+    )
+    t.assert_equals(r2, nil)
+    t.assert_equals(#e2, 1)
+    t.assert_equals(e2[1].type, 'UNDEFINED_VALUE')
+    t.assert_equals(e2[1].path, '$.x')
+
+    -- top-level box.NULL with default
+    local r3, e3 = cv.check(
+        box.NULL,
+        {type = 'number', default = 99}
+    )
+    t.assert_equals(e3, {})
+    t.assert_equals(r3, 99)
+end
+
 function g.test_oneof_transform()
     -- transform on oneof node must be applied
     -- after the matching variant is validated

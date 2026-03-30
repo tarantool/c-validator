@@ -2676,6 +2676,28 @@ cv_map_apply_rename(lua_State *L, int data_idx,
 	}
 }
 
+/*
+ * Returns true if value at idx is nil or box.NULL.
+ * Used to treat box.NULL as an absent value for
+ * default substitution and UNDEFINED_VALUE checks.
+ */
+static bool
+cv_is_null(lua_State *L, int idx)
+{
+	if (lua_type(L, idx) == LUA_TNIL)
+		return true;
+	if (cv_ref_box_null == LUA_NOREF)
+		return false;
+	/* convert to absolute index before push */
+	if (idx < 0)
+		idx = lua_gettop(L) + idx + 1;
+	lua_rawgeti(L, LUA_REGISTRYINDEX,
+	    cv_ref_box_null);
+	bool eq = lua_equal(L, idx, -1);
+	lua_pop(L, 1);
+	return eq;
+}
+
 static bool
 cv_check_map(lua_State *L, struct cv_ctx *ctx,
              int data_idx,
@@ -2798,6 +2820,21 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 				lua_pop(L, 1);
 				val_idx = 0;
 			}
+		}
+
+		/*
+		 * box.NULL in place of a field value:
+		 * treat as absent only when default is
+		 * available. Otherwise pass box.NULL to
+		 * cv_check_node so that nullable fields
+		 * get their transform called.
+		 */
+		if (found_as != NULL &&
+		    cv_is_null(L, val_idx) &&
+		    pp->node->default_ref != LUA_NOREF) {
+			lua_pop(L, 1);
+			val_idx  = 0;
+			found_as = NULL;
 		}
 
 		if (found_as == NULL) {
@@ -3128,39 +3165,35 @@ cv_check_node(lua_State *L, struct cv_ctx *ctx,
               int data_idx,
               const struct cv_node *n)
 {
-	/* nullable: nil is always ok */
-	if (n->nullable) {
-		bool is_null =
-			(lua_type(L, data_idx) == LUA_TNIL);
-		/* also treat box.NULL as null */
-		if (!is_null &&
-		    cv_ref_box_null != LUA_NOREF) {
-			lua_rawgeti(L, LUA_REGISTRYINDEX,
-			    cv_ref_box_null);
-			is_null = lua_equal(L,
-			    data_idx, -1);
-			lua_pop(L, 1);
-		}
-		if (is_null)
-			return true;
-	}
-
 	/*
-	 * nil value for a required non-null type:
-	 * report UNDEFINED_VALUE, matching the old
-	 * validator behaviour (bench/validator.lua:475).
+	 * Check if value is nil or box.NULL.
+	 * For nullable nodes: skip type-specific
+	 * validation but still run constraint/transform
+	 * (old validator bench/validator.lua:897-927
+	 * always ran transform when #errors == 0).
+	 * For non-nullable: report UNDEFINED_VALUE.
 	 */
-	if (lua_type(L, data_idx) == LUA_TNIL &&
-	    n->type != CV_TYPE_ANY  &&
-	    n->type != CV_TYPE_NULL &&
-	    n->type != CV_TYPE_NIL  &&
-	    !n->optional) {
-		int det = cv_ctx_push_error(L, ctx, n,
-		    "UNDEFINED_VALUE",
-		    "Undefined value");
-		if (det != 0)
-			lua_pop(L, 1);
-		return false;
+	bool is_null = cv_is_null(L, data_idx);
+
+	if (is_null) {
+		if (!n->nullable &&
+		    n->type != CV_TYPE_ANY  &&
+		    n->type != CV_TYPE_NULL &&
+		    n->type != CV_TYPE_NIL  &&
+		    !n->optional) {
+			int det = cv_ctx_push_error(L, ctx,
+			    n, "UNDEFINED_VALUE",
+			    "Undefined value");
+			if (det != 0)
+				lua_pop(L, 1);
+			return false;
+		}
+		/* nullable nil/box.NULL: skip type check,
+		 * still run constraint and transform */
+		return cv_node_run_constraint(
+		           L, ctx, data_idx, n) &&
+		       cv_node_run_transform(
+		           L, ctx, data_idx, n);
 	}
 
 	bool ok;
@@ -3225,7 +3258,7 @@ cv_schema_check(lua_State *L)
 	 * validation. Use deepcopy so each call
 	 * gets an independent copy of the default.
 	 */
-	if (lua_isnil(L, 2) &&
+	if (cv_is_null(L, 2) &&
 	    (*pp)->default_ref != LUA_NOREF &&
 	    !validate_only) {
 		lua_rawgeti(L, LUA_REGISTRYINDEX,
