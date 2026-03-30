@@ -1882,24 +1882,49 @@ cv_ctx_path(const struct cv_ctx *ctx,
  * ========================================================= */
 
 /*
- * Pushes error onto errors table and leaves the
- * details table on top of the Lua stack.
- * Caller MUST pop details (lua_pop(L,1)) when done.
- * Returns absolute stack index of details table,
- * or 0 if fail_fast (nothing pushed, stack unchanged).
+ * Build and push one error onto the errors table.
+ *
+ * Before calling, push ndetails pairs (key, value)
+ * onto the stack — these become the details table.
+ * If ndetails == 0, the details field is omitted,
+ * matching old validator behaviour.
+ *
+ * The function pops all ndetails*2 values.
+ * Does nothing (pops them anyway) when fail_fast.
  */
-static int
+static void
 cv_ctx_push_error(lua_State *L,
                   const struct cv_ctx *ctx,
                   const struct cv_node *n,
                   const char *code,
-                  const char *message)
+                  const char *message,
+                  int ndetails)
 {
-	if (ctx->fail_fast)
-		return 0;
+	/* always pop the detail pairs */
+	if (ctx->fail_fast) {
+		lua_pop(L, ndetails * 2);
+		return;
+	}
 
 	char path_buf[512];
 	cv_ctx_path(ctx, path_buf, sizeof(path_buf));
+
+	/* build details table from pairs on stack */
+	int det_base = lua_gettop(L) - ndetails * 2;
+	if (ndetails > 0) {
+		lua_newtable(L);
+		int det = lua_gettop(L);
+		for (int i = 0; i < ndetails; i++) {
+			int ki = det_base + i * 2 + 1;
+			int vi = det_base + i * 2 + 2;
+			lua_pushvalue(L, ki);
+			lua_pushvalue(L, vi);
+			lua_rawset(L, det);
+		}
+		/* replace pairs with details table */
+		lua_replace(L, det_base + 1);
+		lua_settop(L, det_base + 1);
+	}
 
 	/* build error table */
 	lua_newtable(L);
@@ -1914,32 +1939,24 @@ cv_ctx_push_error(lua_State *L,
 	lua_pushstring(L, message);
 	lua_setfield(L, err_idx, "message");
 
-	/* name from schema node */
 	if (n != NULL && n->name_ref != LUA_NOREF) {
 		lua_rawgeti(L, LUA_REGISTRYINDEX,
 		    n->name_ref);
 		lua_setfield(L, err_idx, "name");
 	}
 
-	/* build empty details table */
-	lua_newtable(L);
-	lua_setfield(L, err_idx, "details");
+	if (ndetails > 0) {
+		/* details table is at det_base+1 */
+		lua_pushvalue(L, det_base + 1);
+		lua_setfield(L, err_idx, "details");
+		/* pop details table */
+		lua_remove(L, det_base + 1);
+	}
 
-	/* append error to errors table */
+	/* append to errors array */
 	int eidx = (int)lua_objlen(L,
 	    ctx->errors_idx) + 1;
 	lua_rawseti(L, ctx->errors_idx, eidx);
-	/* err_table is now stored, stack is clean */
-
-	/* fetch details back for caller to populate */
-	lua_rawgeti(L, ctx->errors_idx, eidx);
-	lua_getfield(L, -1, "details");
-	/* remove the err table copy below details */
-	lua_remove(L, -2);
-	/* details is now on top */
-	int det_idx = lua_gettop(L);
-
-	return det_idx;
 }
 
 /* =========================================================
@@ -1974,17 +1991,15 @@ cv_node_run_constraint(lua_State *L, struct cv_ctx *ctx,
 	lua_pushvalue(L, data_idx);
 	if (lua_pcall(L, 1, 0, 0) == 0)
 		return true;
+	/* errmsg on stack — save absolute index */
 	int errmsg = lua_gettop(L);
-	int det = cv_ctx_push_error(L, ctx, n,
+	lua_pushstring(L, "value");
+	lua_pushvalue(L, data_idx);
+	lua_pushstring(L, "constraint_error");
+	lua_pushvalue(L, errmsg);
+	cv_ctx_push_error(L, ctx, n,
 	    "CONSTRAINT_ERROR",
-	    "Field constraint detected error");
-	if (det != 0) {
-		lua_pushvalue(L, data_idx);
-		lua_setfield(L, det, "value");
-		lua_pushvalue(L, errmsg);
-		lua_setfield(L, det, "constraint_error");
-		lua_pop(L, 1);
-	}
+	    "Field constraint detected error", 2);
 	lua_pop(L, 1); /* errmsg */
 	return false;
 }
@@ -2009,17 +2024,15 @@ cv_node_run_transform(lua_State *L, struct cv_ctx *ctx,
 		lua_replace(L, data_idx);
 		return true;
 	}
+	/* errmsg on stack — save absolute index */
 	int errmsg = lua_gettop(L);
-	int det = cv_ctx_push_error(L, ctx, n,
+	lua_pushstring(L, "value");
+	lua_pushvalue(L, data_idx);
+	lua_pushstring(L, "transform_error");
+	lua_pushvalue(L, errmsg);
+	cv_ctx_push_error(L, ctx, n,
 	    "TRANSFORM_ERROR",
-	    "Field transformation failed");
-	if (det != 0) {
-		lua_pushvalue(L, data_idx);
-		lua_setfield(L, det, "value");
-		lua_pushvalue(L, errmsg);
-		lua_setfield(L, det, "transform_error");
-		lua_pop(L, 1);
-	}
+	    "Field transformation failed", 2);
 	lua_pop(L, 1); /* errmsg */
 	return false;
 }
@@ -2146,34 +2159,27 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 
 	if (!ok) {
 		char msg[256];
-		/* actual_type: for cdata use typestr */
 		const char *actual_type =
 			lua_typename(L, ltype);
 		snprintf(msg, sizeof(msg),
 		    "Wrong type, expected %s, got %s",
 		    cv_type_names[n->type],
 		    actual_type);
-		int det = cv_ctx_push_error(L, ctx, n,
-		    "TYPE_ERROR", msg);
-		if (det != 0) {
-			lua_pushstring(L,
-			    cv_type_names[n->type]);
-			lua_setfield(L, det,
-			    "expected_type");
-			lua_pushstring(L, actual_type);
-			lua_setfield(L, det,
-			    "actual_type");
-			lua_pushvalue(L, data_idx);
-			lua_setfield(L, det, "value");
-			/* cdata_type for cdata values */
-			if (luaL_iscdata(L, data_idx)) {
-				cv_push_cdata_typestr(L,
-				    data_idx);
-				lua_setfield(L, det,
-				    "cdata_type");
-			}
-			lua_pop(L, 1); /* pop details */
+		lua_pushstring(L, "expected_type");
+		lua_pushstring(L,
+		    cv_type_names[n->type]);
+		lua_pushstring(L, "actual_type");
+		lua_pushstring(L, actual_type);
+		lua_pushstring(L, "value");
+		lua_pushvalue(L, data_idx);
+		int nd = 3;
+		if (luaL_iscdata(L, data_idx)) {
+			lua_pushstring(L, "cdata_type");
+			cv_push_cdata_typestr(L, data_idx);
+			nd = 4;
 		}
+		cv_ctx_push_error(L, ctx, n,
+		    "TYPE_ERROR", msg, nd);
 		return false;
 	}
 
@@ -2184,33 +2190,28 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 
 		if (n->as.string.has_min_length &&
 		    slen < n->as.string.min_length) {
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "VALUE_ERROR",
+			lua_pushstring(L, "min_len");
+			lua_pushnumber(L, (lua_Number)
+			    n->as.string.min_length);
+			lua_pushstring(L, "value");
+			lua_pushvalue(L, data_idx);
+			cv_ctx_push_error(L, ctx, n,
+			    "VALUE_ERROR",
 			    "Value len is less than"
-			    " minimum");
-			if (det != 0) {
-				lua_pushnumber(L, (lua_Number)
-				    n->as.string.min_length);
-				lua_setfield(L, det, "min_len");
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pop(L, 1);
-			}
+			    " minimum", 2);
 			return false;
 		}
 		if (n->as.string.has_max_length &&
 		    slen > n->as.string.max_length) {
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "VALUE_ERROR",
-			    "Value len exceeded maximum");
-			if (det != 0) {
-				lua_pushnumber(L, (lua_Number)
-				    n->as.string.max_length);
-				lua_setfield(L, det, "max_len");
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pop(L, 1);
-			}
+			lua_pushstring(L, "max_len");
+			lua_pushnumber(L, (lua_Number)
+			    n->as.string.max_length);
+			lua_pushstring(L, "value");
+			lua_pushvalue(L, data_idx);
+			cv_ctx_push_error(L, ctx, n,
+			    "VALUE_ERROR",
+			    "Value len exceeded maximum",
+			    2);
 			return false;
 		}
 		/* pattern match via string.find */
@@ -2230,24 +2231,17 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 				lua_pop(L, 1); /* err msg */
 			}
 			if (!matched) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				lua_pushstring(L,
+				    "match_string");
+				lua_rawgeti(L,
+				    LUA_REGISTRYINDEX,
+				    n->as.string.pattern_ref);
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "VALUE_ERROR",
 				    "Value doesn't match"
-				    " the regexp");
-				if (det != 0) {
-					lua_rawgeti(L,
-					    LUA_REGISTRYINDEX,
-					    n->as.string
-					    .pattern_ref);
-					lua_setfield(L, det,
-					    "match_string");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
+				    " the regexp", 2);
 				return false;
 			}
 		}
@@ -2269,33 +2263,24 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 				lua_pop(L, 1);
 			}
 			if (!found) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				lua_pushstring(L,
+				    "enum_variants");
+				lua_newtable(L);
+				for (int i = 0; i <
+				    n->as.string.enums.count;
+				    i++) {
+					lua_rawgeti(L,
+					    LUA_REGISTRYINDEX,
+					    n->as.string
+					    .enums.refs[i]);
+					lua_rawseti(L, -2, i+1);
+				}
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "VALUE_ERROR",
 				    "Value does not belong"
-				    " to set");
-				if (det != 0) {
-					/* enum_variants */
-					lua_newtable(L);
-					for (int i = 0; i <
-					    n->as.string
-					    .enums.count;
-					    i++) {
-						lua_rawgeti(L,
-						    LUA_REGISTRYINDEX,
-						    n->as.string
-						    .enums.refs[i]);
-						lua_rawseti(L,
-						    -2, i + 1);
-					}
-					lua_setfield(L, det,
-					    "enum_variants");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
+				    " to set", 2);
 				return false;
 			}
 		}
@@ -2309,24 +2294,18 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 		if (n->as.number.gt_ref != LUA_NOREF) {
 			lua_rawgeti(L, LUA_REGISTRYINDEX,
 			    n->as.number.gt_ref);
-			bool fail = !lua_lessthan(L, -1,
-			    data_idx);
+			int bound = lua_gettop(L);
+			bool fail = !lua_lessthan(L,
+			    bound, data_idx);
 			if (fail) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				lua_pushstring(L, "gt");
+				lua_pushvalue(L, bound);
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "VALUE_ERROR",
-				    "Value is too small");
-				if (det != 0) {
-					lua_pushvalue(L, -2);
-					lua_setfield(L, det,
-					    "gt");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
-				lua_pop(L, 1);
+				    "Value is too small", 2);
+				lua_pop(L, 1); /* bound */
 				return false;
 			}
 			lua_pop(L, 1);
@@ -2335,24 +2314,18 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 		if (n->as.number.lt_ref != LUA_NOREF) {
 			lua_rawgeti(L, LUA_REGISTRYINDEX,
 			    n->as.number.lt_ref);
+			int bound = lua_gettop(L);
 			bool fail = !lua_lessthan(L,
-			    data_idx, -1);
+			    data_idx, bound);
 			if (fail) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				lua_pushstring(L, "lt");
+				lua_pushvalue(L, bound);
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "VALUE_ERROR",
-				    "Value is too big");
-				if (det != 0) {
-					lua_pushvalue(L, -2);
-					lua_setfield(L, det,
-					    "lt");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
-				lua_pop(L, 1);
+				    "Value is too big", 2);
+				lua_pop(L, 1); /* bound */
 				return false;
 			}
 			lua_pop(L, 1);
@@ -2361,25 +2334,19 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 		if (n->as.number.min_ref != LUA_NOREF) {
 			lua_rawgeti(L, LUA_REGISTRYINDEX,
 			    n->as.number.min_ref);
+			int bound = lua_gettop(L);
 			bool fail = lua_lessthan(L,
-			    data_idx, -1);
+			    data_idx, bound);
 			if (fail) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				lua_pushstring(L, "min");
+				lua_pushvalue(L, bound);
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "VALUE_ERROR",
 				    "Value is less than"
-				    " minimum");
-				if (det != 0) {
-					lua_pushvalue(L, -2);
-					lua_setfield(L, det,
-					    "min");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
-				lua_pop(L, 1);
+				    " minimum", 2);
+				lua_pop(L, 1); /* bound */
 				return false;
 			}
 			lua_pop(L, 1);
@@ -2388,24 +2355,19 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 		if (n->as.number.max_ref != LUA_NOREF) {
 			lua_rawgeti(L, LUA_REGISTRYINDEX,
 			    n->as.number.max_ref);
-			bool fail = lua_lessthan(L, -1,
-			    data_idx);
+			int bound = lua_gettop(L);
+			bool fail = lua_lessthan(L,
+			    bound, data_idx);
 			if (fail) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				lua_pushstring(L, "max");
+				lua_pushvalue(L, bound);
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "VALUE_ERROR",
-				    "Value exceeded maximum");
-				if (det != 0) {
-					lua_pushvalue(L, -2);
-					lua_setfield(L, det,
-					    "max");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
-				lua_pop(L, 1);
+				    "Value exceeded maximum",
+				    2);
+				lua_pop(L, 1); /* bound */
 				return false;
 			}
 			lua_pop(L, 1);
@@ -2428,32 +2390,24 @@ cv_check_scalar(lua_State *L, struct cv_ctx *ctx,
 				lua_pop(L, 1);
 			}
 			if (!found) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				lua_pushstring(L,
+				    "enum_variants");
+				lua_newtable(L);
+				for (int i = 0; i <
+				    n->as.number.enums.count;
+				    i++) {
+					lua_rawgeti(L,
+					    LUA_REGISTRYINDEX,
+					    n->as.number
+					    .enums.refs[i]);
+					lua_rawseti(L, -2, i+1);
+				}
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "VALUE_ERROR",
 				    "Value does not belong"
-				    " to set");
-				if (det != 0) {
-					lua_newtable(L);
-					for (int i = 0; i <
-					    n->as.number
-					    .enums.count;
-					    i++) {
-						lua_rawgeti(L,
-						    LUA_REGISTRYINDEX,
-						    n->as.number
-						    .enums.refs[i]);
-						lua_rawseti(L,
-						    -2, i + 1);
-					}
-					lua_setfield(L, det,
-					    "enum_variants");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
+				    " to set", 2);
 				return false;
 			}
 		}
@@ -2474,21 +2428,19 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 	if (lua_type(L, data_idx) != LUA_TTABLE) {
 		char msg[256];
 		const char *actual_type =
-			lua_typename(L, lua_type(L, data_idx));
-		snprintf(msg, sizeof(msg), "Wrong type, expected array, got %s",
-			 actual_type);
-		int det = cv_ctx_push_error(L, ctx, n, "TYPE_ERROR", msg);
-		if (det != 0) {
-			lua_pushstring(L, "array");
-			lua_setfield(L, det,
-			    "expected_type");
-			lua_pushstring(L, actual_type);
-			lua_setfield(L, det,
-			    "actual_type");
-			lua_pushvalue(L, data_idx);
-			lua_setfield(L, det, "value");
-			lua_pop(L, 1);
-		}
+			lua_typename(L,
+			    lua_type(L, data_idx));
+		snprintf(msg, sizeof(msg),
+		    "Wrong type, expected array, got %s",
+		    actual_type);
+		lua_pushstring(L, "expected_type");
+		lua_pushstring(L, "array");
+		lua_pushstring(L, "actual_type");
+		lua_pushstring(L, actual_type);
+		lua_pushstring(L, "value");
+		lua_pushvalue(L, data_idx);
+		cv_ctx_push_error(L, ctx, n,
+		    "TYPE_ERROR", msg, 3);
 		return false;
 	}
 
@@ -2498,14 +2450,11 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 		lua_pop(L, 1); /* pop value, keep key */
 		if (lua_type(L, -1) != LUA_TNUMBER) {
 			lua_pop(L, 1); /* pop key */
-			int det = cv_ctx_push_error(L, ctx, n,
+			lua_pushstring(L, "value");
+			lua_pushvalue(L, data_idx);
+			cv_ctx_push_error(L, ctx, n,
 			    "ARRAY_EXPECTED",
-			    "Unexpected map");
-			if (det != 0) {
-				lua_pushvalue(L, data_idx);
-				lua_setfield(L, det, "value");
-				lua_pop(L, 1);
-			}
+			    "Unexpected map", 1);
 			return false;
 		}
 	}
@@ -2521,34 +2470,29 @@ cv_check_array(lua_State *L, struct cv_ctx *ctx,
 	 */
 	if (n->as.array.has_min_items &&
 	    (size_t)len < n->as.array.min_items) {
-		int det = cv_ctx_push_error(L, ctx, n,
+		lua_pushstring(L, "min_len");
+		lua_pushnumber(L, (lua_Number)
+		    n->as.array.min_items);
+		lua_pushstring(L, "value");
+		lua_pushvalue(L, data_idx);
+		cv_ctx_push_error(L, ctx, n,
 		    "VALUE_ERROR",
-		    "Value len is less than minimum");
-		if (det != 0) {
-			lua_pushnumber(L, (lua_Number)
-			    n->as.array.min_items);
-			lua_setfield(L, det, "min_len");
-			lua_pushvalue(L, data_idx);
-			lua_setfield(L, det, "value");
-			lua_pop(L, 1);
-		}
+		    "Value len is less than minimum",
+		    2);
 		ok = false;
 		if (ctx->fail_fast)
 			return false;
 	}
 	if (n->as.array.has_max_items &&
 	    (size_t)len > n->as.array.max_items) {
-		int det = cv_ctx_push_error(L, ctx, n,
+		lua_pushstring(L, "max_len");
+		lua_pushnumber(L, (lua_Number)
+		    n->as.array.max_items);
+		lua_pushstring(L, "value");
+		lua_pushvalue(L, data_idx);
+		cv_ctx_push_error(L, ctx, n,
 		    "VALUE_ERROR",
-		    "Value len exceeded maximum");
-		if (det != 0) {
-			lua_pushnumber(L, (lua_Number)
-			    n->as.array.max_items);
-			lua_setfield(L, det, "max_len");
-			lua_pushvalue(L, data_idx);
-			lua_setfield(L, det, "value");
-			lua_pop(L, 1);
-		}
+		    "Value len exceeded maximum", 2);
 		ok = false;
 		if (ctx->fail_fast)
 			return false;
@@ -2706,21 +2650,19 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 	if (lua_type(L, data_idx) != LUA_TTABLE) {
 		char msg[256];
 		const char *actual_type =
-			lua_typename(L, lua_type(L, data_idx));
-		snprintf(msg, sizeof(msg), "Wrong type, expected map, got %s",
-			 actual_type);
-		int det = cv_ctx_push_error(L, ctx, n, "TYPE_ERROR", msg);
-		if (det != 0) {
-			lua_pushstring(L, "map");
-			lua_setfield(L, det,
-			    "expected_type");
-			lua_pushstring(L, actual_type);
-			lua_setfield(L, det,
-			    "actual_type");
-			lua_pushvalue(L, data_idx);
-			lua_setfield(L, det, "value");
-			lua_pop(L, 1);
-		}
+			lua_typename(L,
+			    lua_type(L, data_idx));
+		snprintf(msg, sizeof(msg),
+		    "Wrong type, expected map, got %s",
+		    actual_type);
+		lua_pushstring(L, "expected_type");
+		lua_pushstring(L, "map");
+		lua_pushstring(L, "actual_type");
+		lua_pushstring(L, actual_type);
+		lua_pushstring(L, "value");
+		lua_pushvalue(L, data_idx);
+		cv_ctx_push_error(L, ctx, n,
+		    "TYPE_ERROR", msg, 3);
 		return false;
 	}
 
@@ -2898,14 +2840,9 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 				ctx->path[ctx->depth] = pp->key;
 				ctx->depth++;
 			}
-			{
-				int det = cv_ctx_push_error(
-				    L, ctx, pp->node,
-				    "UNDEFINED_VALUE",
-				    "Undefined value");
-				if (det != 0)
-					lua_pop(L, 1);
-			}
+			cv_ctx_push_error(L, ctx, pp->node,
+			    "UNDEFINED_VALUE",
+			    "Undefined value", 0);
 			if (ctx->depth > 0)
 				ctx->depth--;
 			ok = false;
@@ -3001,20 +2938,16 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 					break;
 			}
 			if (!known) {
-				int det = cv_ctx_push_error(
-				    L, ctx, n,
+				/* key is at -1 on stack */
+				int key_idx = lua_gettop(L);
+				lua_pushstring(L,
+				    "unexpected_key");
+				lua_pushvalue(L, key_idx);
+				lua_pushstring(L, "value");
+				lua_pushvalue(L, data_idx);
+				cv_ctx_push_error(L, ctx, n,
 				    "UNEXPECTED_KEY",
-				    "Unexpected key");
-				if (det != 0) {
-					lua_pushvalue(L, -2);
-					lua_setfield(L, det,
-					    "unexpected_key");
-					lua_pushvalue(L,
-					    data_idx);
-					lua_setfield(L, det,
-					    "value");
-					lua_pop(L, 1);
-				}
+				    "Unexpected key", 2);
 				ok = false;
 				if (ctx->fail_fast) {
 					lua_pop(L, 1);
@@ -3137,22 +3070,19 @@ cv_check_oneof(lua_State *L, struct cv_ctx *ctx,
 	}
 
 	/* push ONEOF_ERROR with details */
-	int det = cv_ctx_push_error(L, ctx, n,
-	    "ONEOF_ERROR",
-	    "The object isn't fit for any variant");
-	if (det != 0) {
-		lua_pushvalue(L, data_idx);
-		lua_setfield(L, det, "value");
-		/* oneof_schema: original Lua table */
-		if (n->as.oneof.schema_ref !=
-		    LUA_NOREF) {
-			lua_rawgeti(L, LUA_REGISTRYINDEX,
-			    n->as.oneof.schema_ref);
-			lua_setfield(L, det,
-			    "oneof_schema");
-		}
-		lua_pop(L, 1); /* pop details */
+	lua_pushstring(L, "value");
+	lua_pushvalue(L, data_idx);
+	int nd = 1;
+	if (n->as.oneof.schema_ref != LUA_NOREF) {
+		lua_pushstring(L, "oneof_schema");
+		lua_rawgeti(L, LUA_REGISTRYINDEX,
+		    n->as.oneof.schema_ref);
+		nd = 2;
 	}
+	cv_ctx_push_error(L, ctx, n,
+	    "ONEOF_ERROR",
+	    "The object isn't fit for any variant",
+	    nd);
 	return false;
 }
 
@@ -3181,11 +3111,9 @@ cv_check_node(lua_State *L, struct cv_ctx *ctx,
 		    n->type != CV_TYPE_NULL &&
 		    n->type != CV_TYPE_NIL  &&
 		    !n->optional) {
-			int det = cv_ctx_push_error(L, ctx,
-			    n, "UNDEFINED_VALUE",
-			    "Undefined value");
-			if (det != 0)
-				lua_pop(L, 1);
+			cv_ctx_push_error(L, ctx, n,
+			    "UNDEFINED_VALUE",
+			    "Undefined value", 0);
 			return false;
 		}
 		/* nullable nil/box.NULL: skip type check,

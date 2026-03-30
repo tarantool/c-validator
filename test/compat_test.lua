@@ -183,6 +183,23 @@ function g.test_array_min_length_and_items()
     t.assert_equals(e[2].details.value, 0)
 end
 
+-- Empty details table must be omitted from error objects,
+-- matching old validator behaviour.
+function g.test_empty_details_omitted()
+    -- UNDEFINED_VALUE has no details in old validator
+    local r, e = cv.check(nil, 'string')
+    t.assert_equals(r, nil)
+    t.assert_equals(#e, 1)
+    t.assert_equals(e[1].type, 'UNDEFINED_VALUE')
+    t.assert_equals(e[1].details, nil)
+
+    -- TYPE_ERROR does have details
+    local r2, e2 = cv.check(42, 'string')
+    t.assert_equals(r2, nil)
+    t.assert_equals(e2[1].type, 'TYPE_ERROR')
+    t.assert_type(e2[1].details, 'table')
+end
+
 function g.test_map_no_properties()
     local schemas = {
         {type = 'map'},
