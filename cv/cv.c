@@ -2662,6 +2662,46 @@ cv_map_delfield(lua_State *L, int tbl_idx,
 	cv_map_setfield(L, tbl_idx, k);
 }
 
+/*
+ * Move one field: data[from] -> data[to], data[from]=nil.
+ * Used both by cv_map_apply_rename and by the props loop
+ * when an alias key needs to be moved to its primary key.
+ */
+static void
+cv_map_move_field(lua_State *L, int data_idx,
+                  const struct cv_key *from,
+                  const struct cv_key *to)
+{
+	if (from->is_int)
+		lua_rawgeti(L, data_idx, from->ival);
+	else
+		lua_getfield(L, data_idx, from->sval);
+	if (lua_isnil(L, -1)) {
+		lua_pop(L, 1);
+		return;
+	}
+	cv_map_setfield(L, data_idx, to);
+	cv_map_delfield(L, data_idx, from);
+}
+
+/*
+ * Apply rename table directly to data: for each
+ * (from -> to) entry move data[from] to data[to].
+ * Used when there are no properties (old validator
+ * bench/validator.lua:780-788).
+ */
+static void
+cv_map_apply_rename(lua_State *L, int data_idx,
+                    const struct cv_rename *r)
+{
+	for (int ri = 0; ri < r->count; ri++) {
+		const struct cv_rename_entry *re =
+			&r->entries[ri];
+		cv_map_move_field(L, data_idx,
+		    &re->from, &re->to);
+	}
+}
+
 static bool
 cv_check_map(lua_State *L, struct cv_ctx *ctx,
              int data_idx,
@@ -2689,6 +2729,18 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 	}
 
 	bool ok = true;
+
+	/*
+	 * Apply rename directly to the data table when
+	 * there are no properties. With properties the
+	 * rename is handled via aliases inside the props
+	 * loop (full-run only, not dry-run).
+	 */
+	if (!ctx->validate_only &&
+	    n->as.map.nprops == 0 &&
+	    n->as.map.rename.count > 0)
+		cv_map_apply_rename(L, data_idx,
+		    &n->as.map.rename);
 
 	/* --- map with items (wildcard schema) --- */
 	if (n->as.map.items != NULL) {
@@ -2851,15 +2903,11 @@ cv_check_map(lua_State *L, struct cv_ctx *ctx,
 			continue;
 		}
 
-		/* found — maybe rename */
+		/* found — maybe rename alias -> primary */
 		if (!ctx->validate_only &&
 		    found_as != &pp->key) {
-			/* move alias key -> primary key */
-			lua_pushvalue(L, val_idx);
-			cv_map_setfield(L, data_idx,
-			    &pp->key);
-			cv_map_delfield(L, data_idx,
-			    found_as);
+			cv_map_move_field(L, data_idx,
+			    found_as, &pp->key);
 			/* update val_idx: value is now
 			 * at primary key */
 			lua_pop(L, 1);
