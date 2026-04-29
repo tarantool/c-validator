@@ -69,3 +69,6 @@ add_custom_target(check
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMAND ${CMAKE_CTEST_COMMAND} -V
         --test-dir ${PROJECT_BINARY_DIR})
+
+# Add `make install` - install the module.
+install()
