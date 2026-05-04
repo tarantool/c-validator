@@ -17,8 +17,10 @@ Fast OpenAPI 3.1 Compatible Schema Validator for Tarantool.
 %setup -q -n %{name}-%{version}
 
 %build
-%cmake
-%cmake_build
+mkdir -p build
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=%{_lib}
+#%cmake
+#%cmake_build
 
 %install
 make -C build install DESTDIR=%{buildroot}
@@ -26,9 +28,6 @@ make -C build install DESTDIR=%{buildroot}
 %files
 %{_libdir}/tarantool/*/
 %{_datarootdir}/tarantool/*/
-%doc README.md
-%{!?_licensedir:%global license %doc}
-%license LICENSE AUTHORS
 
 %changelog
 * Mon Feb 27 2017 Roman Tsisyk <roman@tarantool.org> 2.0.0-1
