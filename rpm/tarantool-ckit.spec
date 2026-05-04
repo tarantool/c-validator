@@ -6,7 +6,7 @@ Group: Applications/Databases
 License: BSD
 URL: https://github.com/tarantool/c-validator
 Source0: %{name}-%{version}.tar.gz
-BuildRequires: cmake >= 2.8
+BuildRequires: cmake >= 3.5
 BuildRequires: gcc >= 4.5
 Requires: tarantool >= 1.6.8.0
 
@@ -17,17 +17,15 @@ Fast OpenAPI 3.1 Compatible Schema Validator for Tarantool.
 %setup -q -n %{name}-%{version}
 
 %build
-mkdir -p build
-cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=%{_lib}
-#%cmake
-#%cmake_build
+%cmake
+%cmake_build
 
 %install
-make -C build install DESTDIR=%{buildroot}
+%cmake_install
 
 %files
 %{_libdir}/tarantool/*/
-%{_datarootdir}/tarantool/*/
+%{_datadir}/tarantool/*/
 
 %changelog
 * Mon Feb 27 2017 Roman Tsisyk <roman@tarantool.org> 2.0.0-1
