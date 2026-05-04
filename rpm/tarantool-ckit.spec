@@ -1,33 +1,27 @@
-Name: tarantool-ckit
-Version: 2.0.0
+Name: cv
+Version: 1.0.0
 Release: 1%{?dist}
-Summary: C module template for Tarantool
+Summary: Fast OpenAPI 3.1 Compatible Schema Validator for Tarantool
 Group: Applications/Databases
 License: BSD
-URL: https://github.com/tarantool/modulekit
-Source0: ckit-%{version}.tar.gz
+URL: https://github.com/tarantool/c-validator
+Source0: %{name}-%{version}.tar.gz
 BuildRequires: cmake >= 2.8
 BuildRequires: gcc >= 4.5
-BuildRequires: tarantool-devel >= 1.6.8.0
-BuildRequires: msgpuck-devel >= 1.0.0
-BuildRequires: /usr/bin/prove
 Requires: tarantool >= 1.6.8.0
 
 %description
-This package provides C module template for Tarantool.
+Fast OpenAPI 3.1 Compatible Schema Validator for Tarantool.
 
 %prep
 %setup -q -n %{name}-%{version}
 
 %build
-%cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo
-make %{?_smp_mflags}
-
-%check
-make %{?_smp_mflags} check
+%cmake
+%cmake_build
 
 %install
-%make_install
+make -C build install DESTDIR=%{buildroot}
 
 %files
 %{_libdir}/tarantool/*/
