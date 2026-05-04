@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 
 # Forbid in-source builds to avoid .so files
 # polluting the source tree and confusing LUA_CPATH.
