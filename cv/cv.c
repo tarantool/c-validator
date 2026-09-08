@@ -19,6 +19,39 @@
 #include <string.h>
 #include <stdio.h>
 
+static inline void *
+cv_calloc(size_t nmemb, size_t size)
+{
+	void *ret = calloc(nmemb, size);
+	if (ret == NULL) {
+		say_crit("cv: calloc failed");
+		abort();
+	}
+	return ret;
+}
+
+static inline void *
+cv_realloc(void *ptr, size_t size)
+{
+	void *ret = realloc(ptr, size);
+	if (ret == NULL) {
+		say_crit("cv: realloc failed");
+		abort();
+	}
+	return ret;
+}
+
+static inline char *
+cv_strdup(const char *s)
+{
+	char *ret = strdup(s);
+	if (ret == NULL) {
+		say_crit("cv: strdup failed");
+		abort();
+	}
+	return ret;
+}
+
 /* =========================================================
  * Type codes
  * ========================================================= */
@@ -224,12 +257,6 @@ struct cv_node {
 };
 
 /* =========================================================
- * Static OOM error
- * ========================================================= */
-
-static int cv_oom_error_ref = LUA_NOREF;
-
-/* =========================================================
  * Runtime type handles (set by cv._init)
  * ========================================================= */
 
@@ -423,9 +450,7 @@ cv_props_free(lua_State *L,
 static struct cv_node *
 cv_node_alloc(void)
 {
-	struct cv_node *n = calloc(1, sizeof(*n));
-	if (n == NULL)
-		return NULL;
+	struct cv_node *n = cv_calloc(1, sizeof(*n));
 	n->default_ref    = LUA_NOREF;
 	n->name_ref       = LUA_NOREF;
 	n->constraint_ref = LUA_NOREF;
@@ -560,7 +585,7 @@ cv_type_by_name(const char *name)
  * Parse enum list
  * ========================================================= */
 
-static bool
+static void
 cv_parse_enum(lua_State *L, int tbl_idx,
               struct cv_enum *out,
               enum cv_type ntype,
@@ -568,11 +593,9 @@ cv_parse_enum(lua_State *L, int tbl_idx,
 {
 	int n = (int)lua_objlen(L, tbl_idx);
 	if (n == 0)
-		return true;
+		return;
 
-	out->refs = calloc(n, sizeof(int));
-	if (out->refs == NULL)
-		return false;
+	out->refs = cv_calloc(n, sizeof(int));
 	for (int i = 0; i < n; i++)
 		out->refs[i] = LUA_NOREF;
 	out->count = n;
@@ -586,7 +609,6 @@ cv_parse_enum(lua_State *L, int tbl_idx,
 		out->refs[i - 1] =
 			luaL_ref(L, LUA_REGISTRYINDEX);
 	}
-	return true;
 }
 
 /* =========================================================
@@ -595,19 +617,17 @@ cv_parse_enum(lua_State *L, int tbl_idx,
 
 static struct cv_node *
 cv_compile_node(lua_State *L, int def_idx,
-                const char *path, int errors_idx,
-                bool *oom);
+                const char *path, int errors_idx);
 
 /* =========================================================
  * Parse map properties table.
  * properties table is at stack index props_idx.
  * ========================================================= */
 
-static bool
+static void
 cv_parse_properties(lua_State *L, int props_idx,
                     struct cv_node *n,
-                    const char *path, int errors_idx,
-                    bool *oom)
+                    const char *path, int errors_idx)
 {
 	/* count keys */
 	int nprops = 0;
@@ -618,14 +638,9 @@ cv_parse_properties(lua_State *L, int props_idx,
 	}
 
 	if (nprops == 0)
-		return true;
+		return;
 
-	n->as.map.props = calloc(nprops,
-	                         sizeof(struct cv_property));
-	if (n->as.map.props == NULL) {
-		*oom = true;
-		return false;
-	}
+	n->as.map.props = cv_calloc(nprops, sizeof(struct cv_property));
 	n->as.map.nprops = nprops;
 
 	int i = 0;
@@ -638,12 +653,7 @@ cv_parse_properties(lua_State *L, int props_idx,
 		if (lua_type(L, -2) == LUA_TSTRING) {
 			const char *s = lua_tostring(L, -2);
 			pkey.is_int = false;
-			pkey.sval   = strdup(s);
-			if (pkey.sval == NULL) {
-				lua_pop(L, 1);
-				*oom = true;
-				return false;
-			}
+			pkey.sval   = cv_strdup(s);
 			snprintf(child_path,
 			         sizeof(child_path),
 			         "%s.%s", path, s);
@@ -679,18 +689,13 @@ cv_parse_properties(lua_State *L, int props_idx,
 		struct cv_node *child =
 			cv_compile_node(L, val_idx,
 			                child_path,
-			                errors_idx, oom);
-		if (*oom) {
-			lua_pop(L, 1);
-			return false;
-		}
+			                errors_idx);
 		n->as.map.props[i].node = child;
 		i++;
 		lua_pop(L, 1); /* pop value */
 	}
 	/* adjust nprops in case some keys were skipped */
 	n->as.map.nprops = i;
-	return true;
 }
 
 /* =========================================================
@@ -699,11 +704,8 @@ cv_parse_properties(lua_State *L, int props_idx,
 
 static struct cv_node *
 cv_compile_node(lua_State *L, int def_idx,
-                const char *path, int errors_idx,
-                bool *oom)
+                const char *path, int errors_idx)
 {
-	*oom = false;
-
 	const char *type_str = NULL;
 	bool nullable_from_type = false;
 
@@ -883,10 +885,6 @@ cv_compile_node(lua_State *L, int def_idx,
 	}
 
 	struct cv_node *n = cv_node_alloc();
-	if (n == NULL) {
-		*oom = true;
-		return NULL;
-	}
 	n->type     = (enum cv_type)type_code;
 	n->optional = optional;
 	/* '?' suffix makes value nullable too:
@@ -1022,15 +1020,10 @@ cv_compile_node(lua_State *L, int def_idx,
 		lua_getfield(L, def_idx, "enum");
 		if (lua_type(L, -1) == LUA_TTABLE) {
 			int tbl = lua_gettop(L);
-			if (!cv_parse_enum(L, tbl,
-			        &n->as.string.enums,
-			        CV_TYPE_STRING,
-			        path, errors_idx)) {
-				*oom = true;
-				lua_pop(L, 1);
-				cv_node_free(L, n);
-				return NULL;
-			}
+			cv_parse_enum(L, tbl,
+			    &n->as.string.enums,
+			    CV_TYPE_STRING,
+			    path, errors_idx);
 		}
 		lua_pop(L, 1);
 		break;
@@ -1066,15 +1059,10 @@ cv_compile_node(lua_State *L, int def_idx,
 		lua_getfield(L, def_idx, "enum");
 		if (lua_type(L, -1) == LUA_TTABLE) {
 			int tbl = lua_gettop(L);
-			if (!cv_parse_enum(L, tbl,
-			        &n->as.number.enums,
-			        n->type,
-			        path, errors_idx)) {
-				*oom = true;
-				lua_pop(L, 1);
-				cv_node_free(L, n);
-				return NULL;
-			}
+			cv_parse_enum(L, tbl,
+			    &n->as.number.enums,
+			    n->type,
+			    path, errors_idx);
 		}
 		lua_pop(L, 1);
 		break;
@@ -1095,14 +1083,8 @@ cv_compile_node(lua_State *L, int def_idx,
 			}
 			if (rcount > 0) {
 				n->as.map.rename.entries =
-					calloc(rcount,
+					cv_calloc(rcount,
 					    sizeof(struct cv_rename_entry));
-				if (n->as.map.rename.entries == NULL) {
-					lua_pop(L, 1);
-					*oom = true;
-					cv_node_free(L, n);
-					return NULL;
-				}
 				n->as.map.rename.count = rcount;
 				int ri = 0;
 				lua_pushnil(L);
@@ -1117,15 +1099,8 @@ cv_compile_node(lua_State *L, int def_idx,
 							lua_tointeger(L, -2);
 					} else {
 						e->from.is_int = false;
-						e->from.sval = strdup(
+						e->from.sval = cv_strdup(
 							lua_tostring(L, -2));
-						if (e->from.sval == NULL) {
-							lua_pop(L, 2);
-							lua_pop(L, 1);
-							*oom = true;
-							cv_node_free(L, n);
-							return NULL;
-						}
 					}
 					/* to = value at -1 */
 					if (lua_type(L, -1) ==
@@ -1135,15 +1110,8 @@ cv_compile_node(lua_State *L, int def_idx,
 							lua_tointeger(L, -1);
 					} else {
 						e->to.is_int = false;
-						e->to.sval = strdup(
+						e->to.sval = cv_strdup(
 							lua_tostring(L, -1));
-						if (e->to.sval == NULL) {
-							lua_pop(L, 2);
-							lua_pop(L, 1);
-							*oom = true;
-							cv_node_free(L, n);
-							return NULL;
-						}
 					}
 					ri++;
 					lua_pop(L, 1);
@@ -1170,12 +1138,8 @@ cv_compile_node(lua_State *L, int def_idx,
 			n->as.map.items =
 				cv_compile_node(L, items_idx,
 				    child_path,
-				    errors_idx, oom);
+				    errors_idx);
 			lua_pop(L, 1);
-			if (*oom) {
-				cv_node_free(L, n);
-				return NULL;
-			}
 			break; /* skip properties */
 		}
 		lua_pop(L, 1);
@@ -1186,13 +1150,9 @@ cv_compile_node(lua_State *L, int def_idx,
 		    (lua_type(L, -1) == LUA_TTABLE);
 		if (has_props) {
 			int props_idx = lua_gettop(L);
-			if (!cv_parse_properties(
-			        L, props_idx, n,
-			        path, errors_idx, oom)) {
-				lua_pop(L, 1);
-				cv_node_free(L, n);
-				return NULL;
-			}
+			cv_parse_properties(
+			    L, props_idx, n,
+			    path, errors_idx);
 		}
 		lua_pop(L, 1);
 
@@ -1323,15 +1283,10 @@ cv_compile_node(lua_State *L, int def_idx,
 				struct cv_property *pp =
 					&n->as.map.props[pi];
 				/* grow aliases array by 1 */
-				struct cv_key *na = realloc(
+				struct cv_key *na = cv_realloc(
 					pp->aliases,
 					(pp->naliases + 1) *
 					sizeof(struct cv_key));
-				if (na == NULL) {
-					*oom = true;
-					cv_node_free(L, n);
-					return NULL;
-				}
 				pp->aliases = na;
 				struct cv_key *ak =
 					&pp->aliases[pp->naliases];
@@ -1340,13 +1295,8 @@ cv_compile_node(lua_State *L, int def_idx,
 					ak->ival   = re->from.ival;
 				} else {
 					ak->is_int = false;
-					ak->sval   = strdup(
+					ak->sval   = cv_strdup(
 						re->from.sval);
-					if (ak->sval == NULL) {
-						*oom = true;
-						cv_node_free(L, n);
-						return NULL;
-					}
 				}
 				pp->naliases++;
 			}
@@ -1392,12 +1342,8 @@ cv_compile_node(lua_State *L, int def_idx,
 			n->as.array.items =
 				cv_compile_node(L, items_idx,
 				    child_path,
-				    errors_idx, oom);
+				    errors_idx);
 			lua_pop(L, 1);
-			if (*oom) {
-				cv_node_free(L, n);
-				return NULL;
-			}
 		} else {
 			lua_pop(L, 1);
 		}
@@ -1434,14 +1380,8 @@ cv_compile_node(lua_State *L, int def_idx,
 			break;
 		}
 		n->as.oneof.variants =
-			calloc(vcount,
+			cv_calloc(vcount,
 			       sizeof(struct cv_node *));
-		if (n->as.oneof.variants == NULL) {
-			lua_pop(L, 1);
-			*oom = true;
-			cv_node_free(L, n);
-			return NULL;
-		}
 		n->as.oneof.nvariants = vcount;
 		int vi = 0;
 		lua_pushnil(L);
@@ -1456,12 +1396,7 @@ cv_compile_node(lua_State *L, int def_idx,
 				cv_compile_node(
 				    L, val_idx,
 				    child_path,
-				    errors_idx, oom);
-			if (*oom) {
-				lua_pop(L, 2);
-				cv_node_free(L, n);
-				return NULL;
-			}
+				    errors_idx);
 			n->as.oneof.variants[vi] = v;
 			vi++;
 			lua_pop(L, 1);
@@ -3258,16 +3193,8 @@ cv_compile(lua_State *L)
 	lua_newtable(L);
 	int errors_idx = lua_gettop(L);
 
-	bool oom = false;
 	struct cv_node *n =
-		cv_compile_node(L, 1, "$", errors_idx, &oom);
-
-	if (oom) {
-		lua_pushnil(L);
-		lua_rawgeti(L, LUA_REGISTRYINDEX,
-		            cv_oom_error_ref);
-		return 2;
-	}
+		cv_compile_node(L, 1, "$", errors_idx);
 
 	int nerrors = (int)lua_objlen(L, errors_idx);
 
@@ -3403,19 +3330,6 @@ cv_is_schema(lua_State *L)
 LUA_API int
 luaopen_cv_cvalidator(lua_State *L)
 {
-	/* pre-allocate OOM error object */
-	lua_newtable(L);
-	lua_newtable(L);
-	lua_pushstring(L, "$");
-	lua_setfield(L, -2, "path");
-	lua_pushstring(L, "MEMORY_ERROR");
-	lua_setfield(L, -2, "type");
-	lua_pushstring(L, "Not enough memory");
-	lua_setfield(L, -2, "message");
-	lua_rawseti(L, -2, 1);
-	cv_oom_error_ref =
-		luaL_ref(L, LUA_REGISTRYINDEX);
-
 	/* metatable for schema nodes */
 	luaL_newmetatable(L, CV_NODE_MT);
 
