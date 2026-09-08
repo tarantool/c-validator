@@ -113,7 +113,7 @@ jobs:
           tt version
 
       - name: Install luatest
-        run: tt rocks install luatest 1.4.0
+        run: tt rocks install luatest 1.4.5
 
       - name: Generate make files
         run: PATH="$PATH:$(pwd)/.rocks/bin" cmake -S . -B build
