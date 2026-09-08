@@ -261,15 +261,15 @@ struct cv_node {
  * ========================================================= */
 
 /* CTypeIDs for int64_t / uint64_t — set at _init time */
-static uint32_t cv_ctid_int64  = 0;
-static uint32_t cv_ctid_uint64 = 0;
+static __thread uint32_t cv_ctid_int64  = 0;
+static __thread uint32_t cv_ctid_uint64 = 0;
 
 /* Lua refs for type checkers / helpers */
-static int cv_ref_uuid_is     = LUA_NOREF;
-static int cv_ref_tuple_is    = LUA_NOREF;
-static int cv_ref_ffi_typestr = LUA_NOREF;
-static int cv_ref_box_null    = LUA_NOREF;
-static int cv_ref_deepcopy    = LUA_NOREF;
+static __thread int cv_ref_uuid_is     = LUA_NOREF;
+static __thread int cv_ref_tuple_is    = LUA_NOREF;
+static __thread int cv_ref_ffi_typestr = LUA_NOREF;
+static __thread int cv_ref_box_null    = LUA_NOREF;
+static __thread int cv_ref_deepcopy    = LUA_NOREF;
 
 /*
  * Helper: is cdata at idx an int64_t?
