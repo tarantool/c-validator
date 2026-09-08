@@ -3240,11 +3240,6 @@ cv__init(lua_State *L)
 	cv_ctid_uint64 = luaL_ctypeid(L, "uint64_t");
 
 	/* uuid_is */
-	if (cv_ref_uuid_is != LUA_NOREF) {
-		luaL_unref(L, LUA_REGISTRYINDEX,
-		    cv_ref_uuid_is);
-		cv_ref_uuid_is = LUA_NOREF;
-	}
 	lua_getfield(L, 1, "uuid_is");
 	if (lua_isfunction(L, -1))
 		cv_ref_uuid_is =
@@ -3253,11 +3248,6 @@ cv__init(lua_State *L)
 		lua_pop(L, 1);
 
 	/* tuple_is */
-	if (cv_ref_tuple_is != LUA_NOREF) {
-		luaL_unref(L, LUA_REGISTRYINDEX,
-		    cv_ref_tuple_is);
-		cv_ref_tuple_is = LUA_NOREF;
-	}
 	lua_getfield(L, 1, "tuple_is");
 	if (lua_isfunction(L, -1))
 		cv_ref_tuple_is =
@@ -3266,11 +3256,6 @@ cv__init(lua_State *L)
 		lua_pop(L, 1);
 
 	/* ffi_typestr */
-	if (cv_ref_ffi_typestr != LUA_NOREF) {
-		luaL_unref(L, LUA_REGISTRYINDEX,
-		    cv_ref_ffi_typestr);
-		cv_ref_ffi_typestr = LUA_NOREF;
-	}
 	lua_getfield(L, 1, "ffi_typestr");
 	if (lua_isfunction(L, -1))
 		cv_ref_ffi_typestr =
@@ -3279,11 +3264,6 @@ cv__init(lua_State *L)
 		lua_pop(L, 1);
 
 	/* box_null — cdata representing NULL */
-	if (cv_ref_box_null != LUA_NOREF) {
-		luaL_unref(L, LUA_REGISTRYINDEX,
-		    cv_ref_box_null);
-		cv_ref_box_null = LUA_NOREF;
-	}
 	lua_getfield(L, 1, "box_null");
 	if (!lua_isnil(L, -1))
 		cv_ref_box_null =
@@ -3292,11 +3272,6 @@ cv__init(lua_State *L)
 		lua_pop(L, 1);
 
 	/* deepcopy function — required */
-	if (cv_ref_deepcopy != LUA_NOREF) {
-		luaL_unref(L, LUA_REGISTRYINDEX,
-		    cv_ref_deepcopy);
-		cv_ref_deepcopy = LUA_NOREF;
-	}
 	lua_getfield(L, 1, "deepcopy");
 	if (!lua_isfunction(L, -1)) {
 		lua_pop(L, 1);
